@@ -1,2 +1,5 @@
 Click the Web section
 Scroll down to Virtualenv part, click "Start a console in this virtualenv". Then use pip... 
+
+
+If you have talib and numpy conflict issue, use "pip install numpy==1.23.4" to fix it.
