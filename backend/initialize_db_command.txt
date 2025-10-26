@@ -1,0 +1,5 @@
+## initialize the complete database with max stock size setup
+1. in the terminal console, [source/myenv/bin/activate] to active the virtual env
+2. [cd backend] to the backend folder
+3. [python main.py] to kick off the backend server
+4. curl -X POST "http://localhost:8000/api/initialize-database?alpha_vantage_api_key=RMHG7PHKL60I5W5V&max_stocks=5"

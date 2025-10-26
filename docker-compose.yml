@@ -1,0 +1,51 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: stock_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: stock_data
+    volumes:
+      - ./docker/data/mongodb:/data/db
+      - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - stock_network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: stock_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./docker/data/redis:/data
+    networks:
+      - stock_network
+
+  postgresql:
+    image: timescale/timescaledb:latest-pg15
+    container_name: stock_postgresql
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: stock_technical_data
+      POSTGRES_USER: stock_user
+      POSTGRES_PASSWORD: stock_password123
+    volumes:
+      - ./docker/data/postgresql:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/postgres-init.sql:ro
+    networks:
+      - stock_network
+
+networks:
+  stock_network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+  redis_data:
