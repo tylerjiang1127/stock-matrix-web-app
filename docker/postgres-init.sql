@@ -1,0 +1,618 @@
+-- PostgreSQL initialization script for stock technical data
+-- Enable TimescaleDB extension
+CREATE EXTENSION IF NOT EXISTS timescaledb;
+
+-- Create tables for different intervals
+-- 1 minute interval
+CREATE TABLE IF NOT EXISTS interval_1m_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns (store as JSONB for flexibility)
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 5 minute interval
+CREATE TABLE IF NOT EXISTS interval_5m_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 15 minute interval
+CREATE TABLE IF NOT EXISTS interval_15m_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 30 minute interval
+CREATE TABLE IF NOT EXISTS interval_30m_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 60 minute interval
+CREATE TABLE IF NOT EXISTS interval_60m_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 1 day interval
+CREATE TABLE IF NOT EXISTS interval_1d_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 1 week interval
+CREATE TABLE IF NOT EXISTS interval_1wk_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- 1 month interval
+CREATE TABLE IF NOT EXISTS interval_1mo_technical (
+    symbol VARCHAR(10) NOT NULL,
+    datetime_index TIMESTAMPTZ NOT NULL,
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    adjusted_close DECIMAL(15,4),
+    volume BIGINT,
+    -- Moving Averages
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma50 DECIMAL(15,4),
+    sma100 DECIMAL(15,4),
+    sma200 DECIMAL(15,4),
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema50 DECIMAL(15,4),
+    ema100 DECIMAL(15,4),
+    ema200 DECIMAL(15,4),
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma50 DECIMAL(15,4),
+    wma100 DECIMAL(15,4),
+    wma200 DECIMAL(15,4),
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema50 DECIMAL(15,4),
+    dema100 DECIMAL(15,4),
+    dema200 DECIMAL(15,4),
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema50 DECIMAL(15,4),
+    tema100 DECIMAL(15,4),
+    tema200 DECIMAL(15,4),
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama50 DECIMAL(15,4),
+    kama100 DECIMAL(15,4),
+    kama200 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_middle DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    rsi_overbought DECIMAL(15,4),
+    rsi_oversold DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Candlestick Patterns
+    candlestick_patterns JSONB,
+    bullish_signal INTEGER,
+    bearish_signal INTEGER,
+    pattern_signal INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (symbol, datetime_index)
+);
+
+-- Convert tables to hypertables (TimescaleDB feature)
+SELECT create_hypertable('interval_1m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
+SELECT create_hypertable('interval_5m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
+SELECT create_hypertable('interval_15m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
+SELECT create_hypertable('interval_30m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
+SELECT create_hypertable('interval_60m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
+SELECT create_hypertable('interval_1d_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 month');
+SELECT create_hypertable('interval_1wk_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 month');
+SELECT create_hypertable('interval_1mo_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 year');
+
+-- Create indexes for better performance
+CREATE INDEX IF NOT EXISTS idx_1m_symbol ON interval_1m_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_5m_symbol ON interval_5m_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_15m_symbol ON interval_15m_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_30m_symbol ON interval_30m_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_60m_symbol ON interval_60m_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_1d_symbol ON interval_1d_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_1wk_symbol ON interval_1wk_technical (symbol);
+CREATE INDEX IF NOT EXISTS idx_1mo_symbol ON interval_1mo_technical (symbol);
+
+-- Create indexes on datetime for time-based queries
+CREATE INDEX IF NOT EXISTS idx_1m_datetime ON interval_1m_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_5m_datetime ON interval_5m_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_15m_datetime ON interval_15m_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_30m_datetime ON interval_30m_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_60m_datetime ON interval_60m_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_1d_datetime ON interval_1d_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_1wk_datetime ON interval_1wk_technical (datetime_index);
+CREATE INDEX IF NOT EXISTS idx_1mo_datetime ON interval_1mo_technical (datetime_index);

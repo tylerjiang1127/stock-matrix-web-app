@@ -1,0 +1,38 @@
+# Python Virtual Environment
+myenv/
+venv/
+env/
+*.pyc
+__pycache__/
+
+# Environment Variables (IMPORTANT: Contains API keys)
+.env
+*.env
+
+# IDE Settings
+.vscode/
+.cursor/
+.idea/
+
+# OS Files
+.DS_Store
+*.swp
+*.swo
+
+# Node modules
+frontend/node_modules/
+
+# Build files
+frontend/build/
+backend/__pycache__/
+
+# Database files (if local)
+*.db
+*.sqlite
+
+# Docker volumes
+data/
+
+# Logs
+*.log
+logs/

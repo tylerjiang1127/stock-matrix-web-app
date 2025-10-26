@@ -1,0 +1,375 @@
+/* StockChart.css */
+.multi-chart-container {
+    width: 100%;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    font-family: 'Raleway', sans-serif;
+}
+
+.chart-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+    align-items: center;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin-bottom: 20px;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.control-group label {
+    font-weight: 600;
+    font-size: 12px;
+    color: #666;
+}
+
+.control-group input,
+.control-group select {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    min-width: 120px;
+}
+
+/* Stock search container */
+.stock-search-container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.stock-suggestions {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.stock-suggestion-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #f0f0f0;
+    transition: background-color 0.2s;
+}
+
+.stock-suggestion-item:hover {
+    background-color: #f8f9fa;
+}
+
+.stock-suggestion-item:last-child {
+    border-bottom: none;
+}
+
+.stock-symbol {
+    font-weight: 600;
+    color: #333;
+    font-size: 14px;
+}
+
+.stock-name {
+    color: #666;
+    font-size: 12px;
+    text-align: right;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fetch-button {
+    background: #007bff;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s;
+}
+
+.fetch-button:hover:not(:disabled) {
+    background: #0056b3;
+}
+
+.fetch-button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+.company-info {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+
+.company-info h2 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.company-details {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    font-size: 14px;
+    color: #666;
+}
+
+.error-message {
+    background: #f8d7da;
+    color: #721c24;
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    border: 1px solid #f5c6cb;
+}
+
+.charts-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.chart-section {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 5px 5px 5px rgba(0,0,0,0.1);
+    overflow: hidden;
+    position: relative;
+}
+
+.chart-title {
+    background: #f2f2f2;
+    padding: 12px 20px;
+    font-weight: 600;
+    color: #333;
+    border-bottom: 1px solid #dee2e6;
+    font-size: 14px;
+}
+
+/* Time Range Selector Styles */
+.time-range-selector {
+    display: flex;
+    gap: 5px;
+    padding: 10px 20px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.time-range-button {
+    padding: 6px 12px;
+    border: 1px solid #007bff;
+    background: white;
+    color: #007bff;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.2s;
+    min-width: 50px;
+}
+
+.time-range-button:hover {
+    background: #007bff;
+    color: white;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,123,255,0.3);
+}
+
+.time-range-button:active {
+    transform: translateY(0);
+    box-shadow: none;
+}
+
+.chart-container {
+    width: 100%;
+    position: relative;
+}
+
+/* vertical sync line indicator */
+/* .chart-container::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: rgba(0, 0, 0, 0.3);
+    border-left: 1px dashed rgba(0, 0, 0, 0.5);
+    z-index: 10;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+} */
+
+.chart-container:hover::before {
+    opacity: 1;
+}
+
+.price-chart {
+    height: 400px;
+}
+
+.volume-chart {
+    height: 150px;
+}
+
+.technical-chart {
+    height: 200px;
+}
+
+/* adjust Lightweight Charts legend position */
+.chart-container ::deep .tv-lightweight-charts {
+    position: relative;
+}
+
+/* leave more right space for legend */
+.chart-section .chart-container {
+    padding-right: 120px; /* leave space for legend */
+}
+
+/* custom legend style */
+.chart-legend {
+    position: absolute;
+    top: 10px; 
+    right: 10px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 10px;
+    font-size: 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    z-index: 1000;
+    max-width: 140px;
+    min-width: 120px;
+}
+
+.legend-section {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid #eee;
+}
+
+.legend-title {
+    font-weight: 600;
+    color: #333;
+    font-size: 11px;
+    margin-bottom: 5px;
+    text-align: center;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+    font-size: 10px;
+    justify-content: space-between;
+}
+
+.legend-color {
+    width: 12px;
+    height: 2px;
+    margin-right: 6px;
+    border-radius: 1px;
+    flex-shrink: 0;
+}
+
+.legend-label {
+    color: #333;
+    font-weight: 600;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.legend-value {
+    color: #666;
+    font-weight: bold;
+    font-family: 'Courier New', monospace;
+    font-size: 9px;
+    flex-shrink: 0;
+    margin-left: 4px;
+}
+
+/* responsive design */
+@media (max-width: 768px) {
+    .chart-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .control-group {
+        width: 100%;
+    }
+    
+    .company-details {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .price-chart {
+        height: 300px;
+    }
+    
+    .volume-chart {
+        height: 120px;
+    }
+    
+    .technical-chart {
+        height: 150px;
+    }
+    
+    .chart-section .chart-container {
+        padding-right: 80px; /* reduce right padding on mobile */
+    }
+    
+    .chart-legend {
+        top: 10px; 
+        right: 5px;
+        max-width: 70px;
+        padding: 8px;
+    }
+}
+
+/* MA线高亮样式 */
+.legend-item-highlighted {
+    background-color: rgba(255, 255, 0, 0.2) !important;
+    border: 2px solid #FFD700 !important;
+    border-radius: 4px;
+    padding: 2px;
+    transition: all 0.2s ease;
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(255, 215, 0, 0.3);
+}
+
+.legend-item {
+    transition: all 0.2s ease;
+}
+
+.legend-color {
+    transition: transform 0.2s ease;
+}
