@@ -2,6 +2,7 @@
 Enhanced PostgreSQL models for OHLCV data and technical indicators
 """
 
+import asyncio
 import pandas as pd
 import json
 import numpy as np
@@ -174,6 +175,8 @@ class SimpleTechnicalDataRepository:
                 
         except Exception as e:
             print(f"❌ Error saving technical data for {symbol} {interval}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     async def _simple_batch_insert(self, table_name: str, records: List[Dict[str, Any]]):
@@ -210,7 +213,7 @@ class SimpleTechnicalDataRepository:
             await connection.executemany(query, batch_data)
     
     async def _enhanced_batch_insert(self, table_name: str, records: List[Dict[str, Any]]):
-        """Enhanced batch insert for OHLCV + technical indicators"""
+        """Enhanced batch insert for OHLCV + technical indicators with chunking"""
         if not records:
             return
         
@@ -233,12 +236,55 @@ class SimpleTechnicalDataRepository:
             {', '.join(update_clauses)}
         """
         
-        # Prepare data for batch insert
-        batch_data = []
-        for record in records:
-            row_data = [record.get(col) for col in columns]
-            batch_data.append(row_data)
+        # CHUNKING: Process in batches to avoid timeout on large datasets
+        CHUNK_SIZE = 500  # Process 500 records at a time
+        total_records = len(records)
+        total_chunks = (total_records + CHUNK_SIZE - 1) // CHUNK_SIZE
         
-        # Execute batch insert
+        if total_records > CHUNK_SIZE:
+            print(f"  📦 Large dataset detected: {total_records} records, splitting into {total_chunks} chunks...")
+        
         async with self.db.pool.acquire() as connection:
-            await connection.executemany(query, batch_data)
+            for chunk_idx in range(0, total_records, CHUNK_SIZE):
+                chunk_end = min(chunk_idx + CHUNK_SIZE, total_records)
+                chunk = records[chunk_idx:chunk_end]
+                
+                # Prepare data for this chunk
+                batch_data = []
+                for record in chunk:
+                    row_data = [record.get(col) for col in columns]
+                    batch_data.append(row_data)
+                
+                # Execute chunk with timeout protection
+                try:
+                    await asyncio.wait_for(
+                        connection.executemany(query, batch_data),
+                        timeout=300.0  # 5 minutes per chunk (for large datasets)
+                    )
+                    
+                    if total_records > CHUNK_SIZE:
+                        chunk_num = (chunk_idx // CHUNK_SIZE) + 1
+                        print(f"    ✓ Chunk {chunk_num}/{total_chunks} inserted ({len(chunk)} records)")
+                        
+                except asyncio.TimeoutError:
+                    chunk_num = (chunk_idx // CHUNK_SIZE) + 1
+                    print(f"    ⚠️ Chunk {chunk_num}/{total_chunks} timed out, retrying with smaller batches...")
+                    
+                    # Fallback: Insert one by one for this chunk
+                    for i, record in enumerate(chunk):
+                        try:
+                            row_data = [record.get(col) for col in columns]
+                            await asyncio.wait_for(
+                                connection.execute(query, *row_data),
+                                timeout=30.0  # 30 seconds per row
+                            )
+                        except Exception as row_error:
+                            print(f"      ❌ Failed to insert row {i+1}/{len(chunk)}: {row_error}")
+                            # Continue with next row
+                    
+                    print(f"    ✓ Chunk {chunk_num}/{total_chunks} completed (with retries)")
+                
+                except Exception as e:
+                    chunk_num = (chunk_idx // CHUNK_SIZE) + 1
+                    print(f"    ❌ Chunk {chunk_num}/{total_chunks} failed: {e}")
+                    raise

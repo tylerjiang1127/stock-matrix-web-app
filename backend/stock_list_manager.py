@@ -126,6 +126,11 @@ class StockListManager:
             df = df.rename(columns={col: column_mapping[col] for col in df.columns if col in column_mapping})
             df['Market_Cap'] = pd.to_numeric(df['Market_Cap'].str.replace(',', ''), errors='coerce')
             
+            # Clean stock symbols: Replace '/' with '.' for Alpha Vantage compatibility
+            # Examples: BRK/A -> BRK.A, BRK/B -> BRK.B
+            df['Symbol'] = df['Symbol'].str.replace('/', '.', regex=False)
+            print(f"✅ Cleaned stock symbols (replaced '/' with '.')")
+            
             # Sort by market cap and limit if max_stocks is specified
             df_sorted = df.sort_values(by='Market_Cap', ascending=False)
             

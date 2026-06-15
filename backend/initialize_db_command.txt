@@ -1,5 +1,38 @@
-## initialize the complete database with max stock size setup
-1. in the terminal console, [source/myenv/bin/activate] to active the virtual env
-2. [cd backend] to the backend folder
-3. [python main.py] to kick off the backend server
-4. curl -X POST "http://localhost:8000/api/initialize-database?alpha_vantage_api_key=RMHG7PHKL60I5W5V&max_stocks=5"
+## Initialize the complete database with async batch processing
+
+1. In terminal: [source myenv/bin/activate] to activate virtual env
+2. [cd backend] to navigate to backend folder
+3. [python main.py] to start the backend server
+4. Use curl to initialize database:
+
+## Default (6 stocks per batch):
+curl -X POST "http://localhost:8000/api/initialize-database" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "alpha_vantage_api_key": "RMHG7PHKL60I5W5V",
+       "max_stocks": 12
+     }'
+
+## Custom batch size (if your API limit is different):
+curl -X POST "http://localhost:8000/api/initialize-database" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "alpha_vantage_api_key": "RMHG7PHKL60I5W5V",
+       "max_stocks": 12,
+       "batch_size": 6
+     }'
+
+## Notes:
+- batch_size: Number of stocks processed concurrently per minute
+- Default batch_size = 6 (matches Premium API limit)
+- 12 stocks with batch_size=6 will take ~2 minutes (2 batches)
+
+
+
+## command to clear the user_id_security table data:
+docker exec -i stock_postgresql psql -U stock_user -d stock_technical_data << 'EOF'
+-- 完全清空认证数据
+TRUNCATE TABLE user_id_security CASCADE;
+-- 确认清空
+SELECT 'Users cleared' as status, COUNT(*) as count FROM user_id_security;
+EOF
