@@ -2,6 +2,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import pandas as pd
+import numpy as np
 from models import StockListModel, StockMetadataModel
 
 class StockListRepository:
@@ -21,8 +22,8 @@ class StockListRepository:
                 # Clean market_cap value to ensure it's JSON-compliant
                 market_cap = row.get('Market_Cap')
                 if market_cap is not None and isinstance(market_cap, (int, float)):
-                    # Check for NaN, Inf, -Inf
-                    if pd.isna(market_cap) or pd.isinf(market_cap):
+                    # Check for NaN, Inf, -Inf using numpy
+                    if np.isnan(market_cap) or np.isinf(market_cap):
                         market_cap = None
                 
                 doc = {
@@ -161,6 +162,9 @@ class StockMetadataRepository:
                                 'columns': df.columns.tolist(),
                                 'index': df.index.tolist()
                             }
+                        elif isinstance(df, dict) and 'data' in df:
+                            # Already processed, keep as is
+                            processed[period][statement_type] = df
                         else:
                             processed[period][statement_type] = {}
         

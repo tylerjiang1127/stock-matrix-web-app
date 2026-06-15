@@ -303,3 +303,197 @@ class TechnicalDataRepository:
         except Exception as e:
             print(f"❌ Error getting latest data for {symbol} {interval}: {e}")
             return None
+
+
+# =============================================
+# Authentication and User Management Models
+# =============================================
+
+class UserRepository:
+    """Repository for user management operations"""
+    
+    def __init__(self, postgres_db):
+        self.db = postgres_db
+    
+    async def create_user(self, email: str, username: str, password_hash: str) -> Optional[str]:
+        """Create a new user and return user_id"""
+        try:
+            query = """
+            INSERT INTO user_id_security (email, username, password_hash, is_email_verified, status)
+            VALUES ($1, $2, $3, FALSE, 'active')
+            RETURNING id
+            """
+            result = await self.db.fetch_one(query, email, username, password_hash)
+            return str(result['id']) if result else None
+        except Exception as e:
+            print(f"❌ Error creating user: {e}")
+            return None
+    
+    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        """Get user by email"""
+        try:
+            query = "SELECT * FROM user_id_security WHERE email = $1"
+            result = await self.db.fetch_one(query, email)
+            return dict(result) if result else None
+        except Exception as e:
+            print(f"❌ Error getting user by email: {e}")
+            return None
+    
+    async def get_user_by_username(self, username: str) -> Optional[Dict[str, Any]]:
+        """Get user by username"""
+        try:
+            query = "SELECT * FROM user_id_security WHERE username = $1"
+            result = await self.db.fetch_one(query, username)
+            return dict(result) if result else None
+        except Exception as e:
+            print(f"❌ Error getting user by username: {e}")
+            return None
+    
+    async def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user by ID"""
+        try:
+            query = "SELECT * FROM user_id_security WHERE id = $1"
+            result = await self.db.fetch_one(query, user_id)
+            return dict(result) if result else None
+        except Exception as e:
+            print(f"❌ Error getting user by ID: {e}")
+            return None
+    
+    async def update_email_verified(self, user_id: str, verified: bool = True) -> bool:
+        """Update user email verification status"""
+        try:
+            query = """
+            UPDATE user_id_security 
+            SET is_email_verified = $1, updated_at = NOW()
+            WHERE id = $2
+            """
+            await self.db.execute_query(query, verified, user_id)
+            return True
+        except Exception as e:
+            print(f"❌ Error updating email verified status: {e}")
+            return False
+    
+    async def update_password(self, user_id: str, password_hash: str) -> bool:
+        """Update user password"""
+        try:
+            query = """
+            UPDATE user_id_security 
+            SET password_hash = $1, updated_at = NOW()
+            WHERE id = $2
+            """
+            await self.db.execute_query(query, password_hash, user_id)
+            return True
+        except Exception as e:
+            print(f"❌ Error updating password: {e}")
+            return False
+    
+    async def update_user_status(self, user_id: str, status: str) -> bool:
+        """Update user status (active, banned, suspended, paused)"""
+        try:
+            query = """
+            UPDATE user_id_security 
+            SET status = $1, updated_at = NOW()
+            WHERE id = $2
+            """
+            await self.db.execute_query(query, status, user_id)
+            return True
+        except Exception as e:
+            print(f"❌ Error updating user status: {e}")
+            return False
+
+
+class TokenRepository:
+    """Repository for token management (email verification and password reset)"""
+    
+    def __init__(self, postgres_db):
+        self.db = postgres_db
+    
+    # Email Verification Tokens
+    async def create_verification_token(self, user_id: str, token: str, expires_at: datetime) -> bool:
+        """Create email verification token"""
+        try:
+            query = """
+            INSERT INTO email_verification_tokens (user_id, token, expires_at)
+            VALUES ($1, $2, $3)
+            """
+            await self.db.execute_query(query, user_id, token, expires_at)
+            return True
+        except Exception as e:
+            print(f"❌ Error creating verification token: {e}")
+            return False
+    
+    async def get_verification_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Get verification token details"""
+        try:
+            query = """
+            SELECT vt.*, u.email, u.username 
+            FROM email_verification_tokens vt
+            JOIN user_id_security u ON vt.user_id = u.id
+            WHERE vt.token = $1
+            """
+            result = await self.db.fetch_one(query, token)
+            return dict(result) if result else None
+        except Exception as e:
+            print(f"❌ Error getting verification token: {e}")
+            return None
+    
+    async def mark_verification_token_used(self, token: str) -> bool:
+        """Mark verification token as used"""
+        try:
+            query = "UPDATE email_verification_tokens SET used = TRUE WHERE token = $1"
+            await self.db.execute_query(query, token)
+            return True
+        except Exception as e:
+            print(f"❌ Error marking verification token used: {e}")
+            return False
+    
+    # Password Reset Tokens
+    async def create_reset_token(self, user_id: str, token: str, expires_at: datetime) -> bool:
+        """Create password reset token"""
+        try:
+            query = """
+            INSERT INTO password_reset_tokens (user_id, token, expires_at)
+            VALUES ($1, $2, $3)
+            """
+            await self.db.execute_query(query, user_id, token, expires_at)
+            return True
+        except Exception as e:
+            print(f"❌ Error creating reset token: {e}")
+            return False
+    
+    async def get_reset_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Get reset token details"""
+        try:
+            query = """
+            SELECT rt.*, u.email, u.username 
+            FROM password_reset_tokens rt
+            JOIN user_id_security u ON rt.user_id = u.id
+            WHERE rt.token = $1
+            """
+            result = await self.db.fetch_one(query, token)
+            return dict(result) if result else None
+        except Exception as e:
+            print(f"❌ Error getting reset token: {e}")
+            return None
+    
+    async def mark_reset_token_used(self, token: str) -> bool:
+        """Mark reset token as used"""
+        try:
+            query = "UPDATE password_reset_tokens SET used = TRUE WHERE token = $1"
+            await self.db.execute_query(query, token)
+            return True
+        except Exception as e:
+            print(f"❌ Error marking reset token used: {e}")
+            return False
+    
+    async def delete_expired_tokens(self) -> bool:
+        """Delete all expired tokens"""
+        try:
+            query1 = "DELETE FROM email_verification_tokens WHERE expires_at < NOW()"
+            query2 = "DELETE FROM password_reset_tokens WHERE expires_at < NOW()"
+            await self.db.execute_query(query1)
+            await self.db.execute_query(query2)
+            return True
+        except Exception as e:
+            print(f"❌ Error deleting expired tokens: {e}")
+            return False

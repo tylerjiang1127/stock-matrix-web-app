@@ -26,51 +26,76 @@ import requests
 from requests.exceptions import ConnectionError
 from bs4 import BeautifulSoup
 
+# Add caching and rate limiting
+from functools import lru_cache
+import threading
+
+# Global cache for market data with timestamps
+market_data_cache = {}
+cache_lock = threading.Lock()
+CACHE_DURATION = 60  # Cache data for 60 seconds
+
+# Circuit breaker for API failures
+api_failure_count = {}
+API_FAILURE_THRESHOLD = 3
+API_COOLDOWN_PERIOD = 300  # 5 minutes cooldown after failures
+
 
 def get_info(ticker):
     try:
+        # Handle empty or invalid ticker
+        if not ticker or ticker.strip() == '':
+            raise ValueError("Empty ticker provided")
+            
         ## Company Information & Company Description
-        ticker = yf.Ticker(ticker)
-        company_overview = ticker.info
+        ticker_obj = yf.Ticker(ticker)
+        company_overview = ticker_obj.info
+        
+        # Check if we got valid data
+        if not company_overview or 'symbol' not in company_overview:
+            raise ValueError(f"No data found for ticker {ticker}")
 
         def get_peratio():
-            if company_overview['trailingEps'] is None:
-                return 'N/A'
-            elif company_overview['trailingEps']<=0:
+            trailing_eps = company_overview.get('trailingEps')
+            prev_close = company_overview.get('regularMarketPreviousClose')
+            if trailing_eps is None or prev_close is None or trailing_eps <= 0:
                 return 'N/A'
             else:
-                return "%.2f" % float(company_overview['regularMarketPreviousClose'] / company_overview['trailingEps'])
+                return "%.2f" % float(prev_close / trailing_eps)
         def get_psratio():
-            if company_overview['priceToSalesTrailing12Months'] is None:
+            ps_ratio = company_overview.get('priceToSalesTrailing12Months')
+            if ps_ratio is None:
                 return 'N/A'
             else:
-                return "%.2f" % float(company_overview['priceToSalesTrailing12Months'])
+                return "%.2f" % float(ps_ratio)
         def get_pbratio():
-            if company_overview['priceToBook'] is None:
+            pb_ratio = company_overview.get('priceToBook')
+            if pb_ratio is None:
                 return 'N/A'
             else:
-                return "%.2f" % float(company_overview['priceToBook'])
+                return "%.2f" % float(pb_ratio)
 
 
         data = [
-        ['Symbol'               , company_overview['symbol']],
-        ['Name'                 , company_overview['longName']],
-        ['Sector'               , company_overview['sector']],
-        ['Industry'             , company_overview['industry']],
-        ['Market Cap'            , format(int(company_overview['marketCap']), ',')+' '+company_overview['currency']],
-        ['Price52WeekHigh'      , "%.2f" % float(company_overview['fiftyTwoWeekHigh']) +' '+company_overview['currency']],
-        ['Price52WeekLow'       , "%.2f" % float(company_overview['fiftyTwoWeekLow'])  +' '+company_overview['currency']],
+        ['Symbol'               , company_overview.get('symbol', 'N/A')],
+        ['Name'                 , company_overview.get('longName', 'N/A')],
+        ['Sector'               , company_overview.get('sector', 'N/A')],
+        ['Industry'             , company_overview.get('industry', 'N/A')],
+        ['Market Cap'            , format(int(company_overview.get('marketCap', 0)), ',')+' '+company_overview.get('currency', 'USD') if company_overview.get('marketCap') else 'N/A'],
+        ['Price52WeekHigh'      , "%.2f" % float(company_overview.get('fiftyTwoWeekHigh', 0)) +' '+company_overview.get('currency', 'USD') if company_overview.get('fiftyTwoWeekHigh') else 'N/A'],
+        ['Price52WeekLow'       , "%.2f" % float(company_overview.get('fiftyTwoWeekLow', 0))  +' '+company_overview.get('currency', 'USD') if company_overview.get('fiftyTwoWeekLow') else 'N/A'],
         ['Price To Earning Ratio'  , get_peratio()],
         ['Price To Sales Ratio TTM' , get_psratio()],
         ['Price To Book Ratio'     , get_pbratio()]
         ]
 
         company_info  = pd.DataFrame(data, columns = ['Indicator','Value'])
-        company_desc  = company_overview['longBusinessSummary']
+        company_desc  = company_overview.get('longBusinessSummary', 'No business summary available.')
 
         return company_info, company_desc
 
-    except:
+    except Exception as e:
+        print(f"Error getting info for ticker {ticker}: {e}")
         data = [
         ['Symbol'               , ''],
         ['Name'                 , ''],
@@ -643,61 +668,223 @@ ticker_options=[
 # get the realtime price and change for
 # NASDAQ/Dow Jones/S&P 500/Russell: IXIC/DJI/GSPC/RUT
 def market_index(name_ind):
-    name = name_ind.upper()
-    url = 'https://finance.yahoo.com/quote/%5E'+name+'?p=%5E'+name
-    headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36' }
-
-    page = requests.get(url, headers=headers)
-    web_content = BeautifulSoup(page.text, 'lxml')
-    web_content_div = web_content.find_all('div', attrs = {'class':'D(ib) Mend(20px)'})
-    spans = web_content_div[0].find_all('span')
-    texts = [span.get_text() for span in spans]
-    price, change, market_status = texts[0], texts[1], texts[2]
-    return price, change, market_status
+    try:
+        name = name_ind.upper()
+        
+        # Check cache first
+        with cache_lock:
+            current_time = time.time()
+            cache_key = f"market_{name}"
+            
+            if cache_key in market_data_cache:
+                cached_data, timestamp = market_data_cache[cache_key]
+                if current_time - timestamp < CACHE_DURATION:
+                    return cached_data
+        
+        # Add delay to prevent rate limiting
+        time.sleep(0.5)
+        
+        # Use yfinance instead of web scraping for more reliable data
+        ticker = yf.Ticker(f"^{name}")
+        
+        # Check circuit breaker
+        failure_key = f"failures_{name}"
+        current_time_check = time.time()
+        
+        if failure_key in api_failure_count:
+            failure_count, last_failure_time = api_failure_count[failure_key]
+            if failure_count >= API_FAILURE_THRESHOLD:
+                if current_time_check - last_failure_time < API_COOLDOWN_PERIOD:
+                    print(f"Circuit breaker active for {name}, using fallback")
+                    return "N/A", "N/A", "Market Closed"
+                else:
+                    # Reset circuit breaker after cooldown
+                    api_failure_count[failure_key] = (0, current_time_check)
+        
+        # Try to get basic info first with timeout
+        try:
+            hist = ticker.history(period="5d", interval="1d")
+            # Reset failure count on success
+            if failure_key in api_failure_count:
+                api_failure_count[failure_key] = (0, current_time_check)
+        except Exception as e:
+            print(f"Rate limited or error for {name}: {e}")
+            # Increment failure count
+            if failure_key in api_failure_count:
+                count, _ = api_failure_count[failure_key]
+                api_failure_count[failure_key] = (count + 1, current_time_check)
+            else:
+                api_failure_count[failure_key] = (1, current_time_check)
+            return "N/A", "N/A", "Market Closed"
+        
+        if hist.empty or len(hist) < 2:
+            return "N/A", "N/A", "Market Closed"
+            
+        current_price = hist['Close'].iloc[-1]
+        prev_price = hist['Close'].iloc[-2]
+        change = current_price - prev_price
+        change_percent = (change / prev_price) * 100
+        
+        # Format the values
+        price = f"{current_price:.2f}"
+        change_str = f"{change:+.2f} ({change_percent:+.2f}%)"
+        
+        # Determine market status (simplified)
+        from pytz import timezone
+        eastern = timezone('US/Eastern')
+        now = dt.datetime.now(eastern)
+        # Market is typically open 9:30 AM - 4:00 PM ET on weekdays
+        if now.weekday() < 5 and (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 16:
+            market_status = "Market Open"
+        else:
+            market_status = "At Close"
+        
+        result = (price, change_str, market_status)
+        
+        # Cache the result
+        with cache_lock:
+            market_data_cache[cache_key] = (result, current_time)
+            
+        return result
+        
+    except Exception as e:
+        print(f"Error getting market data for {name_ind}: {e}")
+        return "N/A", "N/A", "Market Closed"
 
 def update_market_index():
-    list = ['IXIC','DJI','GSPC','RUT']
+    index_list = ['IXIC','DJI','GSPC','RUT']
     column_names = ['Name', 'Price', 'Change', 'Status']
     df = pd.DataFrame(columns = column_names)
-    for ind in list:
-        price, change, market_status = market_index(ind)
-        row = pd.DataFrame([[ind, price, change, market_status]], columns = column_names)
-        df = pd.concat([df,row], ignore_index = True)
+    
+    # Check if we have recent cached data for all indices
+    with cache_lock:
+        current_time = time.time()
+        all_cached = True
+        cached_results = {}
+        
+        for ind in index_list:
+            cache_key = f"market_{ind}"
+            if cache_key in market_data_cache:
+                cached_data, timestamp = market_data_cache[cache_key]
+                if current_time - timestamp < CACHE_DURATION:
+                    cached_results[ind] = cached_data
+                else:
+                    all_cached = False
+            else:
+                all_cached = False
+        
+        # If all data is cached and fresh, use cached data
+        if all_cached:
+            for ind in index_list:
+                price, change, market_status = cached_results[ind]
+                row = pd.DataFrame([[ind, price, change, market_status]], columns = column_names)
+                df = pd.concat([df,row], ignore_index = True)
+            return df
+    
+    # Otherwise, fetch new data with delays
+    for i, ind in enumerate(index_list):
+        try:
+            # Add progressive delay to spread out API calls
+            if i > 0:
+                time.sleep(2)  # 2 second delay between each index
+                
+            price, change, market_status = market_index(ind)
+            row = pd.DataFrame([[ind, price, change, market_status]], columns = column_names)
+            df = pd.concat([df,row], ignore_index = True)
+        except Exception as e:
+            print(f"Error updating market index for {ind}: {e}")
+            # Add default row if there's an error
+            row = pd.DataFrame([[ind, "N/A", "N/A", "Market Closed"]], columns = column_names)
+            df = pd.concat([df,row], ignore_index = True)
+    
     return df
 
 ## get the 1minute level data for the most recent trading day
 def live_price_df(name):
-    step = 0
-    ticker = yf.Ticker(name)
-    today = dt.datetime.today()
+    try:
+        # Handle empty or None ticker names
+        if not name or name.strip() == '':
+            print(f"Empty ticker name provided")
+            return pd.DataFrame(), pd.DataFrame()
+        
+        # Check cache first for live data
+        with cache_lock:
+            current_time = time.time()
+            cache_key = f"live_{name}"
+            
+            if cache_key in market_data_cache:
+                cached_data, timestamp = market_data_cache[cache_key]
+                # Use shorter cache for live data (30 seconds)
+                if current_time - timestamp < 30:
+                    return cached_data
+        
+        # Add delay to prevent rate limiting
+        time.sleep(1)
+            
+        step = 0
+        ticker = yf.Ticker(name)
+        today = dt.datetime.today()
 
-    start = today
-    end   = start + dt.timedelta(days = 1)
-    start_date, end_date = start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-    df = ticker.history(start=start_date, end=end_date, interval="1m")
-    ## use step to judge whether the ticker is valid or not, if ticker is not a issue we use this while function to find the last trade day data
-    while df.empty:
-        start, end = start - dt.timedelta(days = 1), end - dt.timedelta(days = 1)
+        start = today
+        end   = start + dt.timedelta(days = 1)
         start_date, end_date = start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
-        df = ticker.history(start=start_date, end=end_date, interval="1m")
-        step = step+1
-        if step > 5:
-            break
+        
+        try:
+            df = ticker.history(start=start_date, end=end_date, interval="1m")
+        except Exception as e:
+            print(f"Failed to get ticker '{name}' reason: {e}")
+            # Return cached data if available, else empty
+            with cache_lock:
+                if cache_key in market_data_cache:
+                    return market_data_cache[cache_key][0]
+            return pd.DataFrame(), pd.DataFrame()
+            
+        ## use step to judge whether the ticker is valid or not, if ticker is not a issue we use this while function to find the last trade day data
+        while df.empty:
+            start, end = start - dt.timedelta(days = 1), end - dt.timedelta(days = 1)
+            start_date, end_date = start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+            try:
+                df = ticker.history(start=start_date, end=end_date, interval="1m")
+            except Exception as e:
+                print(f"${name}: possibly delisted; no price data found  (1m {start_date} -> {end_date})")
+            step = step+1
+            if step > 5:
+                break
 
-    prev_start = start - dt.timedelta(days = 1)
-    prev_end   = prev_start + dt.timedelta(days = 1)
-    prev_start_date, prev_end_date = prev_start.strftime("%Y-%m-%d"), prev_end.strftime("%Y-%m-%d")
-    prev_df = ticker.history(start=prev_start_date, end=prev_end_date, interval="1m")
-    ## if the ticker has issue, the step must >5, then prev_df will be set empty; if the ticker is not issue, we use while function to find the pre available trade day data
-    while prev_df.empty:
-        if step > 5:
-            break
-        else:
-            prev_start, prev_end = prev_start - dt.timedelta(days = 1), prev_end - dt.timedelta(days = 1)
-            prev_start_date, prev_end_date = prev_start.strftime("%Y-%m-%d"), prev_end.strftime("%Y-%m-%d")
+        prev_start = start - dt.timedelta(days = 1)
+        prev_end   = prev_start + dt.timedelta(days = 1)
+        prev_start_date, prev_end_date = prev_start.strftime("%Y-%m-%d"), prev_end.strftime("%Y-%m-%d")
+        
+        try:
             prev_df = ticker.history(start=prev_start_date, end=prev_end_date, interval="1m")
+        except Exception as e:
+            print(f"Error getting previous day data for {name}: {e}")
+            prev_df = pd.DataFrame()
+            
+        ## if the ticker has issue, the step must >5, then prev_df will be set empty; if the ticker is not issue, we use while function to find the pre available trade day data
+        while prev_df.empty:
+            if step > 5:
+                break
+            else:
+                prev_start, prev_end = prev_start - dt.timedelta(days = 1), prev_end - dt.timedelta(days = 1)
+                prev_start_date, prev_end_date = prev_start.strftime("%Y-%m-%d"), prev_end.strftime("%Y-%m-%d")
+                try:
+                    prev_df = ticker.history(start=prev_start_date, end=prev_end_date, interval="1m")
+                except Exception as e:
+                    print(f"${name}: possibly delisted; no price data found  (1m {prev_start_date} -> {prev_end_date})")
+                prev_attempts += 1
 
-    return df, prev_df
+        result = (df, prev_df)
+        
+        # Cache the result
+        with cache_lock:
+            market_data_cache[cache_key] = (result, current_time)
+            
+        return result
+        
+    except Exception as e:
+        print(f"Error in live_price_df for ticker '{name}': {e}")
+        return pd.DataFrame(), pd.DataFrame()
 
 ## set up color difference
 def live_price_color(df,prev_df):
@@ -1007,19 +1194,19 @@ def macd_hist_color(tech):
 
 ## Layout Design and Interactive Design
 
-app = dash.Dash(__name__)
+app = dash.Dash(__name__, suppress_callback_exceptions=True)
 
 app.title = "Lazyman Stock Research"
 
 app.layout = html.Div([
-    # Interval
+    # Interval - Increased intervals to reduce API calls
     dcc.Interval(
         id='interval-component1',
-        interval=1*5000, # in milliseconds
+        interval=1*30000, # 30 seconds instead of 5 seconds
         n_intervals=0),
     dcc.Interval(
         id='interval-component2',
-        interval=1*1000*60, # in milliseconds
+        interval=1*1000*180, # 3 minutes instead of 1 minute
         n_intervals=0),
     # Header row
     html.Div(
@@ -1061,17 +1248,17 @@ app.layout = html.Div([
         [
             dcc.Link(
                 "Stock Market Live Price",
-                href="https://tylerjiang1127.pythonanywhere.com/marketlive",
+                href="/marketlive",
                 className="tab first",
             ),
             dcc.Link(
                 "Fundamentals Overview",
-                href="https://tylerjiang1127.pythonanywhere.com/fundamental",
+                href="/fundamental",
                 className="tab",
             ),
             dcc.Link(
                 "Technical Charts",
-                href="https://tylerjiang1127.pythonanywhere.com/technical",
+                href="/technical",
                 className="tab",
             ),
         ],
@@ -1080,7 +1267,7 @@ app.layout = html.Div([
 
     # Content
     html.Div(
-        [dcc.Location(id="url", refresh=True), html.Div(id="page-content")]
+        [dcc.Location(id="url", refresh=False), html.Div(id="page-content")]
     )
 
 ], className = "page")
@@ -1092,6 +1279,8 @@ def display_page(pathname):
         return fundamental_create_layout(app)
     elif pathname=="/technical":
         return technical_create_layout(app)
+    elif pathname=="/marketlive" or pathname is None:
+        return marketlive_create_layout(app)
     else:
         return marketlive_create_layout(app)
 
@@ -1102,9 +1291,14 @@ def display_page(pathname):
     [State('enter_ticker', 'value')]
 )
 def update_overview(n_clicks, input_value):
-
-    input_value = input_value.upper()
-
+    # Handle empty or None input values
+    if not input_value or input_value.strip() == '':
+        return html.Div([
+            html.H5("Please select a stock ticker to view company information.", 
+                   style={'color': 'grey', 'text-align': 'center', 'margin': '50px'})
+        ])
+    
+    input_value = input_value.upper().strip()
     company_info, company_desc = get_info(input_value)
 
     if company_info.empty:
@@ -1136,10 +1330,15 @@ def update_overview(n_clicks, input_value):
     Output('show_year_quarter_view', 'children'),
     [Input('Year_Quarter', 'value')],
     [State('enter_ticker', 'value')],
+    suppress_callback_exceptions=True
 )
 def update_year_quarter_view(Year_Quarter, input_value):
+    # Handle empty or None input values
+    if not input_value or input_value.strip() == '':
+        return []
+    
     # Content 2 -- Last Quarter Fundamentals Results
-    input_value = input_value.upper()
+    input_value = input_value.upper().strip()
     IncomeStatement, BalanceSheet, CashFlow, lastquarter1, lastquarter2, lastquarter3, currency = fundamentals_tables(input_value, Year_Quarter)
 
     if IncomeStatement.empty:
@@ -1223,10 +1422,18 @@ def update(reset):
 @app.callback(
     Output('technical chart', 'figure'),
     [Input('submit-button', 'n_clicks')],
-    [State('enter_ticker', 'value'), State('my-date-picker-range','start_date'), State('my-date-picker-range','end_date')]
+    [State('enter_ticker', 'value'), State('my-date-picker-range','start_date'), State('my-date-picker-range','end_date')],
+    suppress_callback_exceptions=True
 )
 def update_chart(n_clicks, input_value, start_date, end_date):
-    input_value = input_value.upper()
+    # Handle empty or None input values
+    if not input_value or input_value.strip() == '':
+        fig = go.Figure()
+        fig.update_layout(title='Please select a stock ticker to view technical chart',
+                         plot_bgcolor='White', paper_bgcolor='White')
+        return fig
+        
+    input_value = input_value.upper().strip()
     ticker = yf.Ticker(input_value)
 
     ## set up timeframe
@@ -1631,7 +1838,8 @@ def update_chart(n_clicks, input_value, start_date, end_date):
                Output('sp_price', 'style')       , Output('sp_change', 'style'),
                Output('rut_price', 'style')      , Output('rut_change', 'style'),
                Output('datetime', 'children')    , Output('marketstatus','children')],
-               Input('interval-component1', 'n_intervals'))
+               Input('interval-component1', 'n_intervals'),
+               suppress_callback_exceptions=True)
 def update_indexes(n):
     df = update_market_index()
     nasdaq_price  = df.iloc[0][1]
@@ -1662,10 +1870,21 @@ def update_indexes(n):
 @app.callback(
     Output('stock live', 'figure'),
     [Input('submit-button', 'n_clicks'), Input('interval-component2', 'n_intervals')],
-    [State('enter_ticker', 'value')]
+    [State('enter_ticker', 'value')],
+    suppress_callback_exceptions=True
 )
 def stock_live_chart(n_clicks, n, input_value):
-    input_value = input_value.upper()
+    # Handle empty or None input values
+    if not input_value or input_value.strip() == '':
+        fig = go.Figure()
+        fig.update_layout(title='Please Search a Valid Stock',
+                          plot_bgcolor='#DEDEDE',
+                          hovermode="x unified",
+                          xaxis=dict(showspikes=True, showgrid=True, spikemode='across', spikesnap='hovered data'),
+                          yaxis=dict(showspikes=True, showgrid=True, spikemode='across', spikesnap='hovered data', tickformat="$,.2f"))
+        return fig
+        
+    input_value = input_value.upper().strip()
     df, prev_df = live_price_df(input_value)
     fig = go.Figure()
     if df.empty is False and prev_df.empty is False:
@@ -1731,7 +1950,8 @@ def stock_live_chart(n_clicks, n, input_value):
 
 @app.callback([Output('NASDAQ', 'figure')  , Output('DJI', 'figure'),
                Output('SP500', 'figure')   , Output('RUT2000', 'figure')],
-               Input('interval-component2', 'n_intervals'))
+               Input('interval-component2', 'n_intervals'),
+               suppress_callback_exceptions=True)
 def update_indexes(n):
     fig1 = live_price_fig("^IXIC")
     fig1.update_layout(title = "<b>NASDAQ Index<b>")

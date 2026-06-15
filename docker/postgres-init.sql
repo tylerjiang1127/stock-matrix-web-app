@@ -1,9 +1,13 @@
 -- PostgreSQL initialization script for stock technical data
+-- Generated automatically based on stock_metadata_fetcher.py MA periods configuration
 -- Enable TimescaleDB extension
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
--- Create tables for different intervals
--- 1 minute interval
+-- =============================================
+-- Technical Data Tables (Interval-Specific)
+-- =============================================
+
+-- 1M interval
 CREATE TABLE IF NOT EXISTS interval_1m_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -17,39 +21,39 @@ CREATE TABLE IF NOT EXISTS interval_1m_technical (
     sma5 DECIMAL(15,4),
     sma10 DECIMAL(15,4),
     sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
+    sma30 DECIMAL(15,4),
+    sma60 DECIMAL(15,4),
+    sma120 DECIMAL(15,4),
     ema5 DECIMAL(15,4),
     ema10 DECIMAL(15,4),
     ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
+    ema30 DECIMAL(15,4),
+    ema60 DECIMAL(15,4),
+    ema120 DECIMAL(15,4),
     wma5 DECIMAL(15,4),
     wma10 DECIMAL(15,4),
     wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
+    wma30 DECIMAL(15,4),
+    wma60 DECIMAL(15,4),
+    wma120 DECIMAL(15,4),
     dema5 DECIMAL(15,4),
     dema10 DECIMAL(15,4),
     dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
+    dema30 DECIMAL(15,4),
+    dema60 DECIMAL(15,4),
+    dema120 DECIMAL(15,4),
     tema5 DECIMAL(15,4),
     tema10 DECIMAL(15,4),
     tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
+    tema30 DECIMAL(15,4),
+    tema60 DECIMAL(15,4),
+    tema120 DECIMAL(15,4),
     kama5 DECIMAL(15,4),
     kama10 DECIMAL(15,4),
     kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    kama30 DECIMAL(15,4),
+    kama60 DECIMAL(15,4),
+    kama120 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -66,7 +70,7 @@ CREATE TABLE IF NOT EXISTS interval_1m_technical (
     k DECIMAL(15,4),
     d DECIMAL(15,4),
     j DECIMAL(15,4),
-    -- Candlestick Patterns (store as JSONB for flexibility)
+    -- Candlestick Patterns
     candlestick_patterns JSONB,
     bullish_signal INTEGER,
     bearish_signal INTEGER,
@@ -76,7 +80,8 @@ CREATE TABLE IF NOT EXISTS interval_1m_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 5 minute interval
+
+-- 5M interval
 CREATE TABLE IF NOT EXISTS interval_5m_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -87,42 +92,42 @@ CREATE TABLE IF NOT EXISTS interval_5m_technical (
     adjusted_close DECIMAL(15,4),
     volume BIGINT,
     -- Moving Averages
-    sma5 DECIMAL(15,4),
-    sma10 DECIMAL(15,4),
-    sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
-    ema5 DECIMAL(15,4),
-    ema10 DECIMAL(15,4),
-    ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
-    wma5 DECIMAL(15,4),
-    wma10 DECIMAL(15,4),
-    wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
-    dema5 DECIMAL(15,4),
-    dema10 DECIMAL(15,4),
-    dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
-    tema5 DECIMAL(15,4),
-    tema10 DECIMAL(15,4),
-    tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
-    kama5 DECIMAL(15,4),
-    kama10 DECIMAL(15,4),
-    kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    sma6 DECIMAL(15,4),
+    sma12 DECIMAL(15,4),
+    sma24 DECIMAL(15,4),
+    sma36 DECIMAL(15,4),
+    sma72 DECIMAL(15,4),
+    sma144 DECIMAL(15,4),
+    ema6 DECIMAL(15,4),
+    ema12 DECIMAL(15,4),
+    ema24 DECIMAL(15,4),
+    ema36 DECIMAL(15,4),
+    ema72 DECIMAL(15,4),
+    ema144 DECIMAL(15,4),
+    wma6 DECIMAL(15,4),
+    wma12 DECIMAL(15,4),
+    wma24 DECIMAL(15,4),
+    wma36 DECIMAL(15,4),
+    wma72 DECIMAL(15,4),
+    wma144 DECIMAL(15,4),
+    dema6 DECIMAL(15,4),
+    dema12 DECIMAL(15,4),
+    dema24 DECIMAL(15,4),
+    dema36 DECIMAL(15,4),
+    dema72 DECIMAL(15,4),
+    dema144 DECIMAL(15,4),
+    tema6 DECIMAL(15,4),
+    tema12 DECIMAL(15,4),
+    tema24 DECIMAL(15,4),
+    tema36 DECIMAL(15,4),
+    tema72 DECIMAL(15,4),
+    tema144 DECIMAL(15,4),
+    kama6 DECIMAL(15,4),
+    kama12 DECIMAL(15,4),
+    kama24 DECIMAL(15,4),
+    kama36 DECIMAL(15,4),
+    kama72 DECIMAL(15,4),
+    kama144 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -149,7 +154,8 @@ CREATE TABLE IF NOT EXISTS interval_5m_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 15 minute interval
+
+-- 15M interval
 CREATE TABLE IF NOT EXISTS interval_15m_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -160,42 +166,42 @@ CREATE TABLE IF NOT EXISTS interval_15m_technical (
     adjusted_close DECIMAL(15,4),
     volume BIGINT,
     -- Moving Averages
-    sma5 DECIMAL(15,4),
-    sma10 DECIMAL(15,4),
-    sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
-    ema5 DECIMAL(15,4),
-    ema10 DECIMAL(15,4),
-    ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
-    wma5 DECIMAL(15,4),
-    wma10 DECIMAL(15,4),
-    wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
-    dema5 DECIMAL(15,4),
-    dema10 DECIMAL(15,4),
-    dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
-    tema5 DECIMAL(15,4),
-    tema10 DECIMAL(15,4),
-    tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
-    kama5 DECIMAL(15,4),
-    kama10 DECIMAL(15,4),
-    kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    sma4 DECIMAL(15,4),
+    sma8 DECIMAL(15,4),
+    sma16 DECIMAL(15,4),
+    sma24 DECIMAL(15,4),
+    sma48 DECIMAL(15,4),
+    sma96 DECIMAL(15,4),
+    ema4 DECIMAL(15,4),
+    ema8 DECIMAL(15,4),
+    ema16 DECIMAL(15,4),
+    ema24 DECIMAL(15,4),
+    ema48 DECIMAL(15,4),
+    ema96 DECIMAL(15,4),
+    wma4 DECIMAL(15,4),
+    wma8 DECIMAL(15,4),
+    wma16 DECIMAL(15,4),
+    wma24 DECIMAL(15,4),
+    wma48 DECIMAL(15,4),
+    wma96 DECIMAL(15,4),
+    dema4 DECIMAL(15,4),
+    dema8 DECIMAL(15,4),
+    dema16 DECIMAL(15,4),
+    dema24 DECIMAL(15,4),
+    dema48 DECIMAL(15,4),
+    dema96 DECIMAL(15,4),
+    tema4 DECIMAL(15,4),
+    tema8 DECIMAL(15,4),
+    tema16 DECIMAL(15,4),
+    tema24 DECIMAL(15,4),
+    tema48 DECIMAL(15,4),
+    tema96 DECIMAL(15,4),
+    kama4 DECIMAL(15,4),
+    kama8 DECIMAL(15,4),
+    kama16 DECIMAL(15,4),
+    kama24 DECIMAL(15,4),
+    kama48 DECIMAL(15,4),
+    kama96 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -222,7 +228,8 @@ CREATE TABLE IF NOT EXISTS interval_15m_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 30 minute interval
+
+-- 30M interval
 CREATE TABLE IF NOT EXISTS interval_30m_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -233,42 +240,42 @@ CREATE TABLE IF NOT EXISTS interval_30m_technical (
     adjusted_close DECIMAL(15,4),
     volume BIGINT,
     -- Moving Averages
-    sma5 DECIMAL(15,4),
-    sma10 DECIMAL(15,4),
-    sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
-    ema5 DECIMAL(15,4),
-    ema10 DECIMAL(15,4),
-    ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
-    wma5 DECIMAL(15,4),
-    wma10 DECIMAL(15,4),
-    wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
-    dema5 DECIMAL(15,4),
-    dema10 DECIMAL(15,4),
-    dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
-    tema5 DECIMAL(15,4),
-    tema10 DECIMAL(15,4),
-    tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
-    kama5 DECIMAL(15,4),
-    kama10 DECIMAL(15,4),
-    kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    sma3 DECIMAL(15,4),
+    sma6 DECIMAL(15,4),
+    sma12 DECIMAL(15,4),
+    sma18 DECIMAL(15,4),
+    sma36 DECIMAL(15,4),
+    sma72 DECIMAL(15,4),
+    ema3 DECIMAL(15,4),
+    ema6 DECIMAL(15,4),
+    ema12 DECIMAL(15,4),
+    ema18 DECIMAL(15,4),
+    ema36 DECIMAL(15,4),
+    ema72 DECIMAL(15,4),
+    wma3 DECIMAL(15,4),
+    wma6 DECIMAL(15,4),
+    wma12 DECIMAL(15,4),
+    wma18 DECIMAL(15,4),
+    wma36 DECIMAL(15,4),
+    wma72 DECIMAL(15,4),
+    dema3 DECIMAL(15,4),
+    dema6 DECIMAL(15,4),
+    dema12 DECIMAL(15,4),
+    dema18 DECIMAL(15,4),
+    dema36 DECIMAL(15,4),
+    dema72 DECIMAL(15,4),
+    tema3 DECIMAL(15,4),
+    tema6 DECIMAL(15,4),
+    tema12 DECIMAL(15,4),
+    tema18 DECIMAL(15,4),
+    tema36 DECIMAL(15,4),
+    tema72 DECIMAL(15,4),
+    kama3 DECIMAL(15,4),
+    kama6 DECIMAL(15,4),
+    kama12 DECIMAL(15,4),
+    kama18 DECIMAL(15,4),
+    kama36 DECIMAL(15,4),
+    kama72 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -295,7 +302,8 @@ CREATE TABLE IF NOT EXISTS interval_30m_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 60 minute interval
+
+-- 60M interval
 CREATE TABLE IF NOT EXISTS interval_60m_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -306,42 +314,42 @@ CREATE TABLE IF NOT EXISTS interval_60m_technical (
     adjusted_close DECIMAL(15,4),
     volume BIGINT,
     -- Moving Averages
+    sma3 DECIMAL(15,4),
     sma5 DECIMAL(15,4),
-    sma10 DECIMAL(15,4),
-    sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
+    sma8 DECIMAL(15,4),
+    sma13 DECIMAL(15,4),
+    sma21 DECIMAL(15,4),
+    sma34 DECIMAL(15,4),
+    ema3 DECIMAL(15,4),
     ema5 DECIMAL(15,4),
-    ema10 DECIMAL(15,4),
-    ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
+    ema8 DECIMAL(15,4),
+    ema13 DECIMAL(15,4),
+    ema21 DECIMAL(15,4),
+    ema34 DECIMAL(15,4),
+    wma3 DECIMAL(15,4),
     wma5 DECIMAL(15,4),
-    wma10 DECIMAL(15,4),
-    wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
+    wma8 DECIMAL(15,4),
+    wma13 DECIMAL(15,4),
+    wma21 DECIMAL(15,4),
+    wma34 DECIMAL(15,4),
+    dema3 DECIMAL(15,4),
     dema5 DECIMAL(15,4),
-    dema10 DECIMAL(15,4),
-    dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
+    dema8 DECIMAL(15,4),
+    dema13 DECIMAL(15,4),
+    dema21 DECIMAL(15,4),
+    dema34 DECIMAL(15,4),
+    tema3 DECIMAL(15,4),
     tema5 DECIMAL(15,4),
-    tema10 DECIMAL(15,4),
-    tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
+    tema8 DECIMAL(15,4),
+    tema13 DECIMAL(15,4),
+    tema21 DECIMAL(15,4),
+    tema34 DECIMAL(15,4),
+    kama3 DECIMAL(15,4),
     kama5 DECIMAL(15,4),
-    kama10 DECIMAL(15,4),
-    kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    kama8 DECIMAL(15,4),
+    kama13 DECIMAL(15,4),
+    kama21 DECIMAL(15,4),
+    kama34 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -368,7 +376,8 @@ CREATE TABLE IF NOT EXISTS interval_60m_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 1 day interval
+
+-- 1D interval
 CREATE TABLE IF NOT EXISTS interval_1d_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -382,39 +391,45 @@ CREATE TABLE IF NOT EXISTS interval_1d_technical (
     sma5 DECIMAL(15,4),
     sma10 DECIMAL(15,4),
     sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
+    sma30 DECIMAL(15,4),
+    sma60 DECIMAL(15,4),
+    sma120 DECIMAL(15,4),
+    sma250 DECIMAL(15,4),
     ema5 DECIMAL(15,4),
     ema10 DECIMAL(15,4),
     ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
+    ema30 DECIMAL(15,4),
+    ema60 DECIMAL(15,4),
+    ema120 DECIMAL(15,4),
+    ema250 DECIMAL(15,4),
     wma5 DECIMAL(15,4),
     wma10 DECIMAL(15,4),
     wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
+    wma30 DECIMAL(15,4),
+    wma60 DECIMAL(15,4),
+    wma120 DECIMAL(15,4),
+    wma250 DECIMAL(15,4),
     dema5 DECIMAL(15,4),
     dema10 DECIMAL(15,4),
     dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
+    dema30 DECIMAL(15,4),
+    dema60 DECIMAL(15,4),
+    dema120 DECIMAL(15,4),
+    dema250 DECIMAL(15,4),
     tema5 DECIMAL(15,4),
     tema10 DECIMAL(15,4),
     tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
+    tema30 DECIMAL(15,4),
+    tema60 DECIMAL(15,4),
+    tema120 DECIMAL(15,4),
+    tema250 DECIMAL(15,4),
     kama5 DECIMAL(15,4),
     kama10 DECIMAL(15,4),
     kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    kama30 DECIMAL(15,4),
+    kama60 DECIMAL(15,4),
+    kama120 DECIMAL(15,4),
+    kama250 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -441,7 +456,8 @@ CREATE TABLE IF NOT EXISTS interval_1d_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 1 week interval
+
+-- 1WK interval
 CREATE TABLE IF NOT EXISTS interval_1wk_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -455,39 +471,33 @@ CREATE TABLE IF NOT EXISTS interval_1wk_technical (
     sma5 DECIMAL(15,4),
     sma10 DECIMAL(15,4),
     sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
+    sma30 DECIMAL(15,4),
+    sma60 DECIMAL(15,4),
     ema5 DECIMAL(15,4),
     ema10 DECIMAL(15,4),
     ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
+    ema30 DECIMAL(15,4),
+    ema60 DECIMAL(15,4),
     wma5 DECIMAL(15,4),
     wma10 DECIMAL(15,4),
     wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
+    wma30 DECIMAL(15,4),
+    wma60 DECIMAL(15,4),
     dema5 DECIMAL(15,4),
     dema10 DECIMAL(15,4),
     dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
+    dema30 DECIMAL(15,4),
+    dema60 DECIMAL(15,4),
     tema5 DECIMAL(15,4),
     tema10 DECIMAL(15,4),
     tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
+    tema30 DECIMAL(15,4),
+    tema60 DECIMAL(15,4),
     kama5 DECIMAL(15,4),
     kama10 DECIMAL(15,4),
     kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    kama30 DECIMAL(15,4),
+    kama60 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -514,7 +524,8 @@ CREATE TABLE IF NOT EXISTS interval_1wk_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
--- 1 month interval
+
+-- 1MO interval
 CREATE TABLE IF NOT EXISTS interval_1mo_technical (
     symbol VARCHAR(10) NOT NULL,
     datetime_index TIMESTAMPTZ NOT NULL,
@@ -525,42 +536,42 @@ CREATE TABLE IF NOT EXISTS interval_1mo_technical (
     adjusted_close DECIMAL(15,4),
     volume BIGINT,
     -- Moving Averages
+    sma3 DECIMAL(15,4),
     sma5 DECIMAL(15,4),
     sma10 DECIMAL(15,4),
-    sma20 DECIMAL(15,4),
-    sma50 DECIMAL(15,4),
-    sma100 DECIMAL(15,4),
-    sma200 DECIMAL(15,4),
+    sma12 DECIMAL(15,4),
+    sma24 DECIMAL(15,4),
+    sma36 DECIMAL(15,4),
+    ema3 DECIMAL(15,4),
     ema5 DECIMAL(15,4),
     ema10 DECIMAL(15,4),
-    ema20 DECIMAL(15,4),
-    ema50 DECIMAL(15,4),
-    ema100 DECIMAL(15,4),
-    ema200 DECIMAL(15,4),
+    ema12 DECIMAL(15,4),
+    ema24 DECIMAL(15,4),
+    ema36 DECIMAL(15,4),
+    wma3 DECIMAL(15,4),
     wma5 DECIMAL(15,4),
     wma10 DECIMAL(15,4),
-    wma20 DECIMAL(15,4),
-    wma50 DECIMAL(15,4),
-    wma100 DECIMAL(15,4),
-    wma200 DECIMAL(15,4),
+    wma12 DECIMAL(15,4),
+    wma24 DECIMAL(15,4),
+    wma36 DECIMAL(15,4),
+    dema3 DECIMAL(15,4),
     dema5 DECIMAL(15,4),
     dema10 DECIMAL(15,4),
-    dema20 DECIMAL(15,4),
-    dema50 DECIMAL(15,4),
-    dema100 DECIMAL(15,4),
-    dema200 DECIMAL(15,4),
+    dema12 DECIMAL(15,4),
+    dema24 DECIMAL(15,4),
+    dema36 DECIMAL(15,4),
+    tema3 DECIMAL(15,4),
     tema5 DECIMAL(15,4),
     tema10 DECIMAL(15,4),
-    tema20 DECIMAL(15,4),
-    tema50 DECIMAL(15,4),
-    tema100 DECIMAL(15,4),
-    tema200 DECIMAL(15,4),
+    tema12 DECIMAL(15,4),
+    tema24 DECIMAL(15,4),
+    tema36 DECIMAL(15,4),
+    kama3 DECIMAL(15,4),
     kama5 DECIMAL(15,4),
     kama10 DECIMAL(15,4),
-    kama20 DECIMAL(15,4),
-    kama50 DECIMAL(15,4),
-    kama100 DECIMAL(15,4),
-    kama200 DECIMAL(15,4),
+    kama12 DECIMAL(15,4),
+    kama24 DECIMAL(15,4),
+    kama36 DECIMAL(15,4),
     -- Bollinger Bands
     bbands_upper DECIMAL(15,4),
     bbands_middle DECIMAL(15,4),
@@ -587,15 +598,16 @@ CREATE TABLE IF NOT EXISTS interval_1mo_technical (
     PRIMARY KEY (symbol, datetime_index)
 );
 
+
 -- Convert tables to hypertables (TimescaleDB feature)
-SELECT create_hypertable('interval_1m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
-SELECT create_hypertable('interval_5m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
-SELECT create_hypertable('interval_15m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
-SELECT create_hypertable('interval_30m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
-SELECT create_hypertable('interval_60m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day');
-SELECT create_hypertable('interval_1d_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 month');
-SELECT create_hypertable('interval_1wk_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 month');
-SELECT create_hypertable('interval_1mo_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 year');
+SELECT create_hypertable('interval_1m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+SELECT create_hypertable('interval_5m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+SELECT create_hypertable('interval_15m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+SELECT create_hypertable('interval_30m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+SELECT create_hypertable('interval_60m_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 day', if_not_exists => TRUE);
+SELECT create_hypertable('interval_1d_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 month', if_not_exists => TRUE);
+SELECT create_hypertable('interval_1wk_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 month', if_not_exists => TRUE);
+SELECT create_hypertable('interval_1mo_technical', 'datetime_index', chunk_time_interval => INTERVAL '1 year', if_not_exists => TRUE);
 
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_1m_symbol ON interval_1m_technical (symbol);
@@ -616,3 +628,55 @@ CREATE INDEX IF NOT EXISTS idx_60m_datetime ON interval_60m_technical (datetime_
 CREATE INDEX IF NOT EXISTS idx_1d_datetime ON interval_1d_technical (datetime_index);
 CREATE INDEX IF NOT EXISTS idx_1wk_datetime ON interval_1wk_technical (datetime_index);
 CREATE INDEX IF NOT EXISTS idx_1mo_datetime ON interval_1mo_technical (datetime_index);
+
+-- =============================================
+-- Authentication and User Management Tables
+-- =============================================
+
+-- Create user status enum type
+DO $$ BEGIN
+    CREATE TYPE user_status AS ENUM ('active', 'banned', 'suspended', 'paused');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- User accounts table
+CREATE TABLE IF NOT EXISTS user_id_security (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    is_email_verified BOOLEAN DEFAULT FALSE,
+    status user_status DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Email verification tokens table
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    token VARCHAR(64) UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Password reset tokens table
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    token VARCHAR(64) UNIQUE NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create indexes for auth tables
+CREATE INDEX IF NOT EXISTS idx_user_email ON user_id_security(email);
+CREATE INDEX IF NOT EXISTS idx_user_username ON user_id_security(username);
+CREATE INDEX IF NOT EXISTS idx_user_status ON user_id_security(status);
+CREATE INDEX IF NOT EXISTS idx_email_verify_token ON email_verification_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_email_verify_user ON email_verification_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token);
+CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);

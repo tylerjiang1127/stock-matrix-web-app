@@ -25,9 +25,9 @@ class PostgreSQLDatabase:
             
             self.pool = await asyncpg.create_pool(
                 database_url,
-                min_size=1,
-                max_size=10,
-                command_timeout=60
+                min_size=2,
+                max_size=20,  # Increased for better concurrency with large batches
+                command_timeout=600  # 10 minutes - for large batch operations
             )
             print("✅ Connected to PostgreSQL database")
             
