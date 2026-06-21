@@ -847,6 +847,25 @@ const StockChart = () => {
         fetchStockData({ [key]: value }, scope);
     };
 
+    // Handle immediate changes for Interval, MA, and Tech Ind
+    // Updates state AND triggers fetch immediately
+    const handleImmediateChange = (key, value) => {
+        // 1. Update form state
+        setSearchParams(prev => ({
+            ...prev,
+            [key]: value
+        }));
+
+        // 2. Determine loading scope
+        let scope = 'charts'; // Default to charts scope (interval changes)
+        if (key === 'ma_options') scope = 'ma';
+        if (key === 'tech_ind') scope = 'tech';
+        // Note: interval changes use 'charts' scope to avoid reloading company info
+
+        // 3. Trigger fetch immediately with new value
+        fetchStockData({ [key]: value }, scope);
+    };
+
     // Initial data fetch
     useEffect(() => {
         fetchStockList(); // Load stock list first
@@ -1016,6 +1035,619 @@ useEffect(() => {
         }
     });
 }, [highlightedMA]); // when highlightedMA changes
+
+// Render trend charts for fundamental data
+useEffect(() => {
+    if (!processedFundamentalData) return;
+    
+    const { incomeData, balanceData, cashFlowData } = processedFundamentalData;
+    
+    // Helper function to format financial values (for use in useEffect)
+    const formatFinancialValueForChart = (value) => {
+        if (value === null || value === undefined || value === '' || value === 'None') return 'N/A';
+        const numValue = typeof value === 'string' ? parseFloat(value) : value;
+        if (isNaN(numValue)) return 'N/A';
+        if (Math.abs(numValue) >= 1e9) return `$${(numValue / 1e9).toFixed(2)}B`;
+        if (Math.abs(numValue) >= 1e6) return `$${(numValue / 1e6).toFixed(2)}M`;
+        if (Math.abs(numValue) >= 1e3) return `$${(numValue / 1e3).toFixed(2)}K`;
+        return `$${numValue.toFixed(2)}`;
+    };
+    
+    // Helper to render a line chart with legend and hover interaction
+    const renderTrendChart = (containerId, data, labels, title, colors) => {
+        const container = document.getElementById(containerId);
+        if (!container || !data || data.length === 0) return;
+        
+        // Clear previous content
+        container.innerHTML = '';
+        
+        // Create wrapper for chart and legend
+        const wrapper = document.createElement('div');
+        wrapper.style.position = 'relative';
+        wrapper.style.width = '100%';
+        wrapper.style.height = '100%';
+        
+        // Create canvas for chart
+        const canvas = document.createElement('canvas');
+        // Canvas width will be adjusted based on available space (container width minus legend width)
+        canvas.width = container.clientWidth - 150; // Reserve space for legend on right
+        canvas.height = container.clientHeight - 20;
+        canvas.style.cursor = 'crosshair';
+        canvas.style.width = '100%';
+        canvas.style.height = '100%';
+        
+        // Create chart container with flex layout
+        const chartContainer = document.createElement('div');
+        chartContainer.style.display = 'flex';
+        chartContainer.style.width = '100%';
+        chartContainer.style.height = '100%';
+        chartContainer.style.gap = '15px';
+        
+        // Create legend container (right side)
+        const legendContainer = document.createElement('div');
+        legendContainer.style.display = 'flex';
+        legendContainer.style.flexDirection = 'column';
+        legendContainer.style.justifyContent = 'flex-start';
+        legendContainer.style.gap = '10px';
+        legendContainer.style.padding = '10px';
+        legendContainer.style.minWidth = '120px';
+        legendContainer.style.flexShrink = 0;
+        
+        data.forEach((series, idx) => {
+            const legendItem = document.createElement('div');
+            legendItem.style.display = 'flex';
+            legendItem.style.alignItems = 'center';
+            legendItem.style.gap = '8px';
+            legendItem.style.fontSize = '11px';
+            legendItem.style.color = '#333';
+            
+            const colorBox = document.createElement('div');
+            colorBox.style.width = '12px';
+            colorBox.style.height = '12px';
+            colorBox.style.backgroundColor = colors[idx] || '#4dabf7';
+            colorBox.style.borderRadius = '2px';
+            colorBox.style.flexShrink = 0;
+            
+            const label = document.createElement('span');
+            label.textContent = series.label;
+            
+            legendItem.appendChild(colorBox);
+            legendItem.appendChild(label);
+            legendContainer.appendChild(legendItem);
+        });
+        
+        // Create canvas wrapper
+        const canvasWrapper = document.createElement('div');
+        canvasWrapper.style.flex = '1';
+        canvasWrapper.style.position = 'relative';
+        canvasWrapper.appendChild(canvas);
+        
+        chartContainer.appendChild(canvasWrapper);
+        chartContainer.appendChild(legendContainer);
+        wrapper.appendChild(chartContainer);
+        container.appendChild(wrapper);
+        
+        const ctx = canvas.getContext('2d');
+        
+        // Update canvas size based on actual container size
+        const updateCanvasSize = () => {
+            const containerRect = canvasWrapper.getBoundingClientRect();
+            canvas.width = containerRect.width;
+            canvas.height = containerRect.height;
+        };
+        updateCanvasSize();
+        
+        const width = canvas.width;
+        const height = canvas.height;
+        const padding = { top: 30, right: 20, bottom: 50, left: 70 };
+        const chartWidth = width - padding.left - padding.right;
+        const chartHeight = height - padding.top - padding.bottom;
+        
+        // Reverse data arrays to show oldest to newest (left to right)
+        const reversedData = data.map(series => ({
+            ...series,
+            values: [...series.values].reverse()
+        }));
+        const reversedLabels = [...labels].reverse();
+        
+        // Find min/max values
+        let minVal = Infinity;
+        let maxVal = -Infinity;
+        reversedData.forEach(series => {
+            series.values.forEach(val => {
+                if (val !== null && val !== undefined && !isNaN(val)) {
+                    minVal = Math.min(minVal, val);
+                    maxVal = Math.max(maxVal, val);
+                }
+            });
+        });
+        
+        if (minVal === Infinity) return;
+        
+        const range = maxVal - minVal || 1;
+        const numPoints = reversedData[0].values.length;
+        const stepX = chartWidth / (numPoints - 1 || 1);
+        
+        // Draw axes
+        ctx.strokeStyle = '#dee2e6';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, padding.top);
+        ctx.lineTo(padding.left, padding.top + chartHeight);
+        ctx.lineTo(padding.left + chartWidth, padding.top + chartHeight);
+        ctx.stroke();
+        
+        // Draw zero line if needed
+        if (minVal < 0 && maxVal > 0) {
+            const zeroY = padding.top + chartHeight - ((0 - minVal) / range) * chartHeight;
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(padding.left, zeroY);
+            ctx.lineTo(padding.left + chartWidth, zeroY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+        
+        // Draw grid lines and Y-axis labels
+        ctx.font = '10px Raleway';
+        ctx.fillStyle = '#666';
+        const numTicks = 5;
+        for (let i = 0; i <= numTicks; i++) {
+            const y = padding.top + chartHeight - (i / numTicks) * chartHeight;
+            const value = minVal + (maxVal - minVal) * (i / numTicks);
+            ctx.beginPath();
+            ctx.moveTo(padding.left, y);
+            ctx.lineTo(padding.left + chartWidth, y);
+            ctx.strokeStyle = '#e9ecef';
+            ctx.stroke();
+            ctx.fillText(formatFinancialValueForChart(value), 5, y + 4);
+        }
+        
+        // Store data points for hover interaction (grouped by time index)
+        const timePoints = [];
+        for (let i = 0; i < numPoints; i++) {
+            const x = padding.left + i * stepX;
+            const pointData = {
+                index: i,
+                date: reversedLabels[i] || '',
+                x: x,
+                values: []
+            };
+            
+            reversedData.forEach((series, seriesIdx) => {
+                const val = series.values[i];
+                if (val !== null && val !== undefined && !isNaN(val)) {
+                    const y = padding.top + chartHeight - ((val - minVal) / range) * chartHeight;
+                    pointData.values.push({
+                        series: series.label,
+                        value: val,
+                        y: y,
+                        color: colors[seriesIdx] || '#4dabf7'
+                    });
+                }
+            });
+            
+            if (pointData.values.length > 0) {
+                timePoints.push(pointData);
+            }
+        }
+        
+        // Draw data lines
+        reversedData.forEach((series, seriesIdx) => {
+            const color = colors[seriesIdx] || '#4dabf7';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            
+            let firstPoint = true;
+            series.values.forEach((val, i) => {
+                if (val !== null && val !== undefined && !isNaN(val)) {
+                    const x = padding.left + i * stepX;
+                    const y = padding.top + chartHeight - ((val - minVal) / range) * chartHeight;
+                    if (firstPoint) {
+                        ctx.moveTo(x, y);
+                        firstPoint = false;
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+            });
+            ctx.stroke();
+            
+            // Draw data points
+            series.values.forEach((val, i) => {
+                if (val !== null && val !== undefined && !isNaN(val)) {
+                    const x = padding.left + i * stepX;
+                    const y = padding.top + chartHeight - ((val - minVal) / range) * chartHeight;
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            });
+        });
+        
+        // Draw X-axis labels
+        const labelStep = Math.max(1, Math.floor(numPoints / 6));
+        reversedLabels.forEach((label, i) => {
+            if (i % labelStep === 0 || i === reversedLabels.length - 1) {
+                const x = padding.left + i * stepX;
+                ctx.fillStyle = '#666';
+                ctx.font = '9px Raleway';
+                ctx.textAlign = 'center';
+                ctx.save();
+                ctx.translate(x, padding.top + chartHeight + 20);
+                ctx.rotate(-Math.PI / 4);
+                ctx.fillText(label, 0, 0);
+                ctx.restore();
+                ctx.textAlign = 'left';
+            }
+        });
+        
+        // Store original drawing function for redraw
+        const redrawChart = (highlightedIndex = null) => {
+            // Update canvas size in case of resize
+            updateCanvasSize();
+            const currentWidth = canvas.width;
+            const currentHeight = canvas.height;
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, currentWidth, currentHeight);
+            
+            // Recalculate dimensions
+            const currentChartWidth = currentWidth - padding.left - padding.right;
+            const currentChartHeight = currentHeight - padding.top - padding.bottom;
+            
+            // Redraw axes
+            ctx.strokeStyle = '#dee2e6';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(padding.left, padding.top);
+            ctx.lineTo(padding.left, padding.top + currentChartHeight);
+            ctx.lineTo(padding.left + currentChartWidth, padding.top + currentChartHeight);
+            ctx.stroke();
+            
+            // Redraw zero line if needed
+            if (minVal < 0 && maxVal > 0) {
+                const zeroY = padding.top + currentChartHeight - ((0 - minVal) / range) * currentChartHeight;
+                ctx.strokeStyle = '#999';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 2]);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, zeroY);
+                ctx.lineTo(padding.left + currentChartWidth, zeroY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+            
+            // Redraw grid lines and Y-axis labels
+            ctx.font = '10px Raleway';
+            ctx.fillStyle = '#666';
+            for (let i = 0; i <= numTicks; i++) {
+                const y = padding.top + currentChartHeight - (i / numTicks) * currentChartHeight;
+                const value = minVal + (maxVal - minVal) * (i / numTicks);
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(padding.left + currentChartWidth, y);
+                ctx.strokeStyle = '#e9ecef';
+                ctx.stroke();
+                ctx.fillText(formatFinancialValueForChart(value), 5, y + 4);
+            }
+            
+            // Recalculate stepX for current width
+            const currentStepX = currentChartWidth / (numPoints - 1 || 1);
+            
+            // Draw data lines
+            reversedData.forEach((series, seriesIdx) => {
+                const color = colors[seriesIdx] || '#4dabf7';
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                
+                let firstPoint = true;
+                series.values.forEach((val, i) => {
+                    if (val !== null && val !== undefined && !isNaN(val)) {
+                        const x = padding.left + i * currentStepX;
+                        const y = padding.top + currentChartHeight - ((val - minVal) / range) * currentChartHeight;
+                        if (firstPoint) {
+                            ctx.moveTo(x, y);
+                            firstPoint = false;
+                        } else {
+                            ctx.lineTo(x, y);
+                        }
+                    }
+                });
+                ctx.stroke();
+                
+                // Draw data points
+                series.values.forEach((val, i) => {
+                    if (val !== null && val !== undefined && !isNaN(val)) {
+                        const x = padding.left + i * currentStepX;
+                        const y = padding.top + currentChartHeight - ((val - minVal) / range) * currentChartHeight;
+                        const isHighlighted = highlightedIndex === i;
+                        
+                        // Draw point with highlight
+                        ctx.fillStyle = color;
+                        ctx.beginPath();
+                        ctx.arc(x, y, isHighlighted ? 5 : 3, 0, 2 * Math.PI);
+                        ctx.fill();
+                        
+                        // Draw highlight circle
+                        if (isHighlighted) {
+                            ctx.strokeStyle = color;
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.arc(x, y, 7, 0, 2 * Math.PI);
+                            ctx.stroke();
+                        }
+                    }
+                });
+            });
+            
+            // Draw vertical line at highlighted point
+            if (highlightedIndex !== null && highlightedIndex >= 0 && highlightedIndex < numPoints) {
+                const x = padding.left + highlightedIndex * currentStepX;
+                ctx.strokeStyle = '#666';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 3]);
+                ctx.beginPath();
+                ctx.moveTo(x, padding.top);
+                ctx.lineTo(x, padding.top + currentChartHeight);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+            
+            // Redraw X-axis labels
+            const labelStep = Math.max(1, Math.floor(numPoints / 6));
+            reversedLabels.forEach((label, i) => {
+                if (i % labelStep === 0 || i === reversedLabels.length - 1) {
+                    const x = padding.left + i * currentStepX;
+                    ctx.fillStyle = '#666';
+                    ctx.font = '9px Raleway';
+                    ctx.textAlign = 'center';
+                    ctx.save();
+                    ctx.translate(x, padding.top + currentChartHeight + 20);
+                    ctx.rotate(-Math.PI / 4);
+                    ctx.fillText(label, 0, 0);
+                    ctx.restore();
+                    ctx.textAlign = 'left';
+                }
+            });
+        };
+        
+        // Add hover interaction
+        let hoveredIndex = null;
+        let tooltip = null;
+        
+        const createTooltip = (pointData, mouseX, mouseY) => {
+            if (tooltip) tooltip.remove();
+            tooltip = document.createElement('div');
+            tooltip.style.position = 'absolute';
+            tooltip.style.backgroundColor = 'rgba(0, 0, 0, 0.85)';
+            tooltip.style.color = 'white';
+            tooltip.style.padding = '10px 14px';
+            tooltip.style.borderRadius = '6px';
+            tooltip.style.fontSize = '11px';
+            tooltip.style.pointerEvents = 'none';
+            tooltip.style.zIndex = '1000';
+            tooltip.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+            
+            // Build tooltip content with all data points
+            let tooltipHTML = `<div style="font-weight: bold; margin-bottom: 6px; font-size: 12px;">${pointData.date}</div>`;
+            pointData.values.forEach(valData => {
+                tooltipHTML += `
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                        <div style="width: 12px; height: 12px; background-color: ${valData.color}; border-radius: 2px;"></div>
+                        <div>${valData.series}: <strong>${formatFinancialValueForChart(valData.value)}</strong></div>
+                    </div>
+                `;
+            });
+            tooltip.innerHTML = tooltipHTML;
+            wrapper.appendChild(tooltip);
+            
+            // Position tooltip
+            const rect = wrapper.getBoundingClientRect();
+            tooltip.style.left = `${mouseX + 15}px`;
+            tooltip.style.top = `${mouseY - tooltip.offsetHeight / 2}px`;
+            
+            // Adjust if tooltip goes off screen
+            const tooltipRect = tooltip.getBoundingClientRect();
+            if (tooltipRect.right > window.innerWidth) {
+                tooltip.style.left = `${mouseX - tooltipRect.width - 15}px`;
+            }
+            if (tooltipRect.top < 0) {
+                tooltip.style.top = '10px';
+            }
+            if (tooltipRect.bottom > window.innerHeight) {
+                tooltip.style.top = `${window.innerHeight - tooltipRect.height - 10}px`;
+            }
+            
+            return tooltip;
+        };
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            // Find closest time point (within reasonable distance)
+            let closestPoint = null;
+            let minDist = Infinity;
+            const snapDistance = stepX * 0.5; // Snap to point if within half the step distance
+            
+            timePoints.forEach(point => {
+                const dist = Math.abs(mouseX - point.x);
+                if (dist < snapDistance && dist < minDist) {
+                    minDist = dist;
+                    closestPoint = point;
+                }
+            });
+            
+            if (closestPoint && (!hoveredIndex || hoveredIndex !== closestPoint.index)) {
+                hoveredIndex = closestPoint.index;
+                redrawChart(hoveredIndex);
+                createTooltip(closestPoint, mouseX, mouseY);
+            } else if (!closestPoint && hoveredIndex !== null) {
+                hoveredIndex = null;
+                redrawChart(null);
+                if (tooltip) {
+                    tooltip.remove();
+                    tooltip = null;
+                }
+            } else if (closestPoint && hoveredIndex === closestPoint.index) {
+                // Update tooltip position while hovering same point
+                if (tooltip) {
+                    const rect = wrapper.getBoundingClientRect();
+                    tooltip.style.left = `${mouseX + 15}px`;
+                    tooltip.style.top = `${mouseY - tooltip.offsetHeight / 2}px`;
+                }
+            }
+        });
+        
+        canvas.addEventListener('mouseleave', () => {
+            hoveredIndex = null;
+            if (tooltip) {
+                tooltip.remove();
+                tooltip = null;
+            }
+            redrawChart(null);
+        });
+    };
+    
+    // Helper function to get value with field name mapping
+    const getFieldValueForChart = (record, fieldName, camelCaseName) => {
+        if (record[fieldName] !== undefined && record[fieldName] !== null) return record[fieldName];
+        if (record[camelCaseName] !== undefined && record[camelCaseName] !== null) return record[camelCaseName];
+        return null;
+    };
+    
+    // Prepare Profitability Trend data
+    if (incomeData.length > 0) {
+        const dates = incomeData.map(d => {
+            const date = d.fiscalDateEnding;
+            if (!date) return '';
+            // Handle both string and date object formats
+            const dateStr = typeof date === 'string' ? date : date.toString();
+            return dateStr.substring(0, 7);
+        });
+        const revenue = incomeData.map(d => {
+            const val = getFieldValueForChart(d, 'Total Revenue', 'totalRevenue');
+            return parseFloat(val) || 0;
+        });
+        const netIncome = incomeData.map(d => {
+            const val = getFieldValueForChart(d, 'Net Income', 'netIncome');
+            return parseFloat(val) || 0;
+        });
+        const grossProfit = incomeData.map(d => {
+            const val = getFieldValueForChart(d, 'Gross Profit', 'grossProfit');
+            return parseFloat(val) || 0;
+        });
+        
+        renderTrendChart('profitability-trend-chart', [
+            { values: revenue, label: 'Revenue' },
+            { values: netIncome, label: 'Net Income' },
+            { values: grossProfit, label: 'Gross Profit' }
+        ], dates, 'Profitability', ['#4dabf7', '#26a69a', '#ff9800']);
+    }
+    
+    // Prepare Debt-Asset Trend data
+    if (balanceData.length > 0) {
+        const dates = balanceData.map(d => {
+            const date = d.fiscalDateEnding;
+            if (!date) return '';
+            const dateStr = typeof date === 'string' ? date : date.toString();
+            return dateStr.substring(0, 7);
+        });
+        const totalAssets = balanceData.map(d => {
+            const val = getFieldValueForChart(d, 'Total Assets', 'totalAssets');
+            return parseFloat(val) || 0;
+        });
+        const totalLiab = balanceData.map(d => {
+            const val = getFieldValueForChart(d, 'Total Liab', 'totalLiabilities') || getFieldValueForChart(d, 'Total Liabilities', 'totalLiabilities');
+            return parseFloat(val) || 0;
+        });
+        const totalEquity = balanceData.map(d => {
+            const val = getFieldValueForChart(d, 'Total Stockholder Equity', 'totalShareholderEquity');
+            return parseFloat(val) || 0;
+        });
+        
+        renderTrendChart('debt-asset-trend-chart', [
+            { values: totalAssets, label: 'Total Assets' },
+            { values: totalLiab, label: 'Total Liabilities' },
+            { values: totalEquity, label: 'Total Equity' }
+        ], dates, 'Debt-Asset', ['#4dabf7', '#ef5350', '#26a69a']);
+    }
+    
+    // Prepare Cash Flow Trend data
+    if (cashFlowData.length > 0) {
+        const dates = cashFlowData.map(d => {
+            const date = d.fiscalDateEnding;
+            if (!date) return '';
+            const dateStr = typeof date === 'string' ? date : date.toString();
+            return dateStr.substring(0, 7);
+        });
+        const operatingCF = cashFlowData.map(d => {
+            const val = getFieldValueForChart(d, 'Total Cash From Operating Activities', 'operatingCashflow');
+            return parseFloat(val) || 0;
+        });
+        const freeCF = cashFlowData.map(d => {
+            const val = getFieldValueForChart(d, 'Free Cash Flow', 'freeCashFlow');
+            // Calculate if not available: Operating CF + Capital Expenditures
+            if (val === null) {
+                const opCF = getFieldValueForChart(d, 'Total Cash From Operating Activities', 'operatingCashflow');
+                const capEx = getFieldValueForChart(d, 'Capital Expenditures', 'capitalExpenditures');
+                return (parseFloat(opCF) || 0) + (parseFloat(capEx) || 0);
+            }
+            return parseFloat(val) || 0;
+        });
+        const investingCF = cashFlowData.map(d => {
+            const val = getFieldValueForChart(d, 'Total Cashflows From Investing Activities', 'cashflowFromInvestment');
+            return parseFloat(val) || 0;
+        });
+        
+        renderTrendChart('cash-flow-trend-chart', [
+            { values: operatingCF, label: 'Operating CF' },
+            { values: freeCF, label: 'Free CF' },
+            { values: investingCF, label: 'Investing CF' }
+        ], dates, 'Cash Flow', ['#4dabf7', '#26a69a', '#ff9800']);
+    }
+}, [processedFundamentalData]);
+
+    // Helper to align chart widths
+    const alignChartWidths = () => {
+        if (!priceChart.current || !volumeChart.current || !priceChartRef.current || !volumeChartRef.current) return;
+        
+        setTimeout(() => {
+            try {
+                // Sync visible time range
+                const priceTimeScale = priceChart.current.timeScale();
+                const priceRange = priceTimeScale.getVisibleRange();
+                if (priceRange) {
+                    volumeChart.current.timeScale().setVisibleRange(priceRange);
+                }
+                
+                // Get the actual canvas widths and adjust volume chart to match price chart
+                const priceCanvas = priceChartRef.current?.querySelector('canvas');
+                const volumeCanvas = volumeChartRef.current?.querySelector('canvas');
+                
+                if (priceCanvas && volumeCanvas) {
+                    const priceRect = priceCanvas.getBoundingClientRect();
+                    const volumeRect = volumeCanvas.getBoundingClientRect();
+                    const widthDiff = priceRect.width - volumeRect.width;
+                    
+                    // Adjust volume chart width if there's a difference
+                    if (Math.abs(widthDiff) > 0) {
+                        const currentVolWidth = volumeChart.current.options().width;
+                        volumeChart.current.applyOptions({ width: currentVolWidth + widthDiff });
+                    }
+                }
+            } catch (e) {
+                // Silently handle sync errors
+            }
+        }, 100);
+    };
 
 // Render trend charts for fundamental data
 useEffect(() => {
@@ -2197,6 +2829,7 @@ useEffect(() => {
                         </div>
                     </div>
                 </div>
+            </header>
 
                 {/* Right Column: Charts */}
                 <div className="charts-column">

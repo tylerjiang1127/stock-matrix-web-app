@@ -70,6 +70,11 @@ class DatabaseInitRequest(BaseModel):
     max_stocks: Optional[int] = None
     batch_size: int = 6
 
+class DatabaseInitRequest(BaseModel):
+    alpha_vantage_api_key: str
+    max_stocks: Optional[int] = None
+    batch_size: int = 6
+
 class ChartDataResponse(BaseModel):
     candlestick_data: List[Dict]
     volume_data: List[Dict]
