@@ -779,8 +779,10 @@
     background-color: rgba(255, 255, 255, 0.7);
     backdrop-filter: blur(3px);
     display: flex;
+    flex-direction: column;
     justify-content: center;
     align-items: center;
+    gap: 8px;
     z-index: 100;
     color: #4dabf7;
     font-weight: 600;
@@ -792,13 +794,12 @@
 
 /* Spinner Animation */
 .loading-spinner {
-    width: 22px;
-    height: 22px;
-    border: 3px solid rgba(77, 171, 247, 0.3);
+    width: 24px;
+    height: 24px;
+    border: 3px solid rgba(77, 171, 247, 0.2);
     border-radius: 50%;
     border-top-color: #4dabf7;
-    animation: spin 1s ease-in-out infinite;
-    margin-right: 10px;
+    animation: spin 0.8s linear infinite;
 }
 
 @keyframes spin {
@@ -937,16 +938,55 @@
 
 /* News article card styles are inline in component */
 
+/* ===== Real-time Badge ===== */
+.realtime-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    margin-left: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.realtime-badge.live {
+    background: rgba(0, 200, 83, 0.15);
+    color: #00c853;
+    border: 1px solid rgba(0, 200, 83, 0.3);
+}
+
+.realtime-badge.live::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #00c853;
+    animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+.realtime-badge.closed {
+    background: rgba(255, 152, 0, 0.15);
+    color: #ff9800;
+    border: 1px solid rgba(255, 152, 0, 0.3);
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
 @media (max-width: 768px) {
     .fundamental-data-container {
         padding: 15px;
     }
-    
+
     .fundamental-tables-grid {
         grid-template-columns: 1fr;
         gap: 15px;
     }
-    
+
     .trend-chart-container {
         height: 180px;
     }

@@ -411,6 +411,95 @@ const StockChart = () => {
         }
     };
 
+    // ── Real-time WebSocket ────────────────────────────
+    const wsRef = useRef(null);
+    const [realtimeStatus, setRealtimeStatus] = useState(null); // null | 'connected' | 'market_closed'
+
+    useEffect(() => {
+        const shouldConnect = chartConfig.interval === '1d' && chartConfig.ticker;
+        if (!shouldConnect) {
+            if (wsRef.current) {
+                wsRef.current.close();
+                wsRef.current = null;
+                setRealtimeStatus(null);
+            }
+            return;
+        }
+
+        let ws;
+        let reconnectTimer;
+        const connect = () => {
+            ws = new WebSocket('ws://localhost:8000/ws/realtime');
+            wsRef.current = ws;
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ action: 'subscribe', symbol: chartConfig.ticker }));
+            };
+
+            ws.onmessage = (evt) => {
+                try {
+                    const msg = JSON.parse(evt.data);
+
+                    if (msg.type === 'status') {
+                        setRealtimeStatus(msg.market_open ? 'connected' : 'market_closed');
+                        return;
+                    }
+
+                    if (msg.type === 'price_update' && msg.symbol === chartConfig.ticker) {
+                        setRealtimeStatus('connected');
+
+                        if (candlestickSeries.current) {
+                            candlestickSeries.current.update({
+                                time: msg.time,
+                                open: msg.open,
+                                high: msg.high,
+                                low: msg.low,
+                                close: msg.close,
+                            });
+                        }
+
+                        if (volumeSeries.current) {
+                            volumeSeries.current.update({
+                                time: msg.time,
+                                value: msg.volume,
+                                color: msg.close >= msg.open ? 'green' : 'red',
+                            });
+                        }
+                    }
+                } catch (_) { /* ignore malformed */ }
+            };
+
+            ws.onclose = () => {
+                wsRef.current = null;
+                reconnectTimer = setTimeout(connect, 5000);
+            };
+
+            ws.onerror = () => ws.close();
+        };
+
+        connect();
+
+        return () => {
+            clearTimeout(reconnectTimer);
+            if (ws) {
+                ws.onclose = null;
+                ws.close();
+            }
+            wsRef.current = null;
+            setRealtimeStatus(null);
+        };
+    }, [chartConfig.ticker, chartConfig.interval]);
+
+    // When symbol changes, update WS subscription
+    const prevTickerRef = useRef(chartConfig.ticker);
+    useEffect(() => {
+        if (prevTickerRef.current !== chartConfig.ticker && wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ action: 'unsubscribe', symbol: prevTickerRef.current }));
+            wsRef.current.send(JSON.stringify({ action: 'subscribe', symbol: chartConfig.ticker }));
+        }
+        prevTickerRef.current = chartConfig.ticker;
+    }, [chartConfig.ticker]);
+
     // initialize three charts
     useEffect(() => {
         let charts = [];
@@ -671,16 +760,14 @@ const StockChart = () => {
         } else if (loadingScope === 'tech') {
             setTechLoading(true);
         } else if (loadingScope === 'charts') {
-            setChartLoading(true); // Chart data only (interval changes)
+            setChartLoading(true);
         } else {
-            setLoading(true); // global (Ticker changes only - includes company info)
-            setFundamentalLoading(true); // Also load fundamental data when ticker changes
+            setLoading(true);
+            setFundamentalLoading(true);
         }
-        
+
         setError(null);
-        
-        // Use override params if provided, otherwise use current searchParams
-        // This allows immediate fetching before state updates propagate
+
         const params = {
             ticker: overrideParams.ticker || searchParams.ticker,
             interval: overrideParams.interval || searchParams.interval,
@@ -688,42 +775,57 @@ const StockChart = () => {
             tech_ind: overrideParams.tech_ind !== undefined ? overrideParams.tech_ind : searchParams.tech_ind
         };
 
-        try {
-            const response = await axios.post('http://localhost:8000/api/stocks/' + params.ticker, {
-                interval: params.interval,
-                ma_options: params.ma_options,
-                tech_ind: params.tech_ind
-            });
-            
-            // Update the active chart configuration
-            // Merge current config with new params to ensure consistency
-            setChartConfig(prev => ({
-                ...prev,
-                ...params
-            }));
-            
-            // Also update searchParams to keep them in sync with what's displayed
-            setSearchParams(prev => ({
-                ...prev,
-                ...params
-            }));
+        // Update config immediately so badge shows new ticker
+        setChartConfig(prev => ({ ...prev, ...params }));
+        setSearchParams(prev => ({ ...prev, ...params }));
 
-            setStockData(response.data);
-            
-            // Extract and store time ranges from chart_config
-            if (response.data.chart_config && response.data.chart_config.time_ranges) {
-                setTimeRanges(response.data.chart_config.time_ranges);
+        // Phase 1: fast PG query (1-year default), renders chart immediately
+        const chartBody = {
+            interval: params.interval,
+            ma_options: params.ma_options,
+            tech_ind: params.tech_ind
+        };
+        const chartUrl = 'http://localhost:8000/api/stocks/' + params.ticker + '/chart';
+
+        const chartPromise = axios.post(chartUrl, chartBody).then(res => {
+            setError(null);
+            setStockData(prev => ({ ...prev, ...res.data }));
+            if (res.data.chart_config && res.data.chart_config.time_ranges) {
+                setTimeRanges(res.data.chart_config.time_ranges);
             }
-        } catch (err) {
-            setError(err.response?.data?.detail || 'Failed to fetch stock data');
-        } finally {
-            // Reset all loading states
             setLoading(false);
             setChartLoading(false);
             setMaLoading(false);
             setTechLoading(false);
+
+            // Phase 2: silently backfill full history in background
+            axios.post(chartUrl, { ...chartBody, days: 36500 }).then(full => {
+                setStockData(prev => ({ ...prev, ...full.data }));
+            }).catch(() => {});
+        }).catch(err => {
+            setError(err.response?.data?.detail || 'Failed to fetch chart data');
+            setLoading(false);
+            setChartLoading(false);
+            setMaLoading(false);
+            setTechLoading(false);
+        });
+
+        // Info data — overview + news + fundamentals, renders panels when ready
+        // Only fetch on global (ticker change), not on interval/MA/tech changes
+        if (loadingScope === 'global') {
+            axios.get('http://localhost:8000/api/stocks/' + params.ticker + '/info')
+                .then(res => {
+                    setStockData(prev => ({ ...prev, ...res.data }));
+                })
+                .catch(() => {})
+                .finally(() => {
+                    setFundamentalLoading(false);
+                });
+        } else {
             setFundamentalLoading(false);
         }
+
+        await chartPromise;
     };
 
     // Handle immediate changes for Interval, MA, and Tech Ind
@@ -2168,6 +2270,12 @@ useEffect(() => {
                     <div className="chart-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                             <span>Stock Price & Moving Averages</span>
+                            {realtimeStatus === 'connected' && (
+                                <span className="realtime-badge live">LIVE</span>
+                            )}
+                            {realtimeStatus === 'market_closed' && (
+                                <span className="realtime-badge closed">MKT CLOSED</span>
+                            )}
                             
                             {/* Interval Selector */}
                     <select

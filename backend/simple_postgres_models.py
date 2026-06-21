@@ -28,14 +28,164 @@ class SimpleTechnicalDataRepository:
         if isinstance(value, (np.integer, np.int64, np.int32)):
             return int(value)
         elif isinstance(value, (np.floating, np.float64, np.float32)):
-            return float(value) if not pd.isna(value) else None
+            if pd.isna(value) or np.isinf(value):
+                return None
+            return float(value)
         elif isinstance(value, np.ndarray):
             return value.tolist()
+        elif isinstance(value, float) and (pd.isna(value) or np.isinf(value)):
+            return None
         elif pd.isna(value):
             return None
         else:
             return value
     
+    async def get_latest_dates(self, interval: str) -> Dict[str, Any]:
+        """Return {symbol: latest_datetime} for all symbols in a given interval table."""
+        table_name = self.interval_tables.get(interval)
+        if not table_name:
+            return {}
+        query = f"SELECT symbol, MAX(datetime_index) as latest FROM {table_name} GROUP BY symbol"
+        async with self.db.pool.acquire() as connection:
+            rows = await connection.fetch(query)
+        return {row['symbol']: row['latest'] for row in rows}
+
+    async def get_top_movers(self, limit: int = 10) -> Dict[str, list]:
+        """Return top gainers and losers by daily % change."""
+        query = """
+            WITH latest_two AS (
+                SELECT symbol, close, datetime_index,
+                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
+                FROM interval_1d_technical
+                WHERE close IS NOT NULL
+            )
+            SELECT
+                a.symbol,
+                a.close as latest_close,
+                b.close as prev_close,
+                CASE WHEN b.close > 0
+                     THEN ROUND(((a.close - b.close) / b.close * 100)::numeric, 2)
+                     ELSE 0 END as change_pct
+            FROM latest_two a
+            JOIN latest_two b ON a.symbol = b.symbol AND b.rn = 2
+            WHERE a.rn = 1 AND b.close > 0
+            ORDER BY change_pct DESC
+        """
+        async with self.db.pool.acquire() as conn:
+            rows = await conn.fetch(query)
+        all_movers = [dict(r) for r in rows]
+        return {
+            "gainers": all_movers[:limit],
+            "losers": all_movers[-limit:][::-1],
+        }
+
+    async def get_volume_anomalies(self, threshold: float = 2.0, limit: int = 20) -> list:
+        """Return symbols where latest volume exceeds 20-day average by threshold std devs."""
+        query = """
+            WITH vol_stats AS (
+                SELECT symbol,
+                       volume,
+                       datetime_index,
+                       AVG(volume) OVER (PARTITION BY symbol ORDER BY datetime_index
+                                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) as avg_vol,
+                       STDDEV(volume) OVER (PARTITION BY symbol ORDER BY datetime_index
+                                            ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) as std_vol,
+                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
+                FROM interval_1d_technical
+                WHERE volume IS NOT NULL AND volume > 0
+            )
+            SELECT symbol, volume, avg_vol, std_vol,
+                   ROUND(((volume - avg_vol) / NULLIF(std_vol, 0))::numeric, 2) as volume_zscore
+            FROM vol_stats
+            WHERE rn = 1
+              AND std_vol > 0
+              AND (volume - avg_vol) / std_vol >= $1
+            ORDER BY volume_zscore DESC
+            LIMIT $2
+        """
+        async with self.db.pool.acquire() as conn:
+            rows = await conn.fetch(query, threshold, limit)
+        return [dict(r) for r in rows]
+
+    async def get_market_breadth(self) -> Dict[str, Any]:
+        """Return advance/decline counts and % of stocks above key SMAs."""
+        query = """
+            WITH latest AS (
+                SELECT symbol, close, sma60, sma250,
+                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
+                FROM interval_1d_technical
+                WHERE close IS NOT NULL
+            ),
+            prev AS (
+                SELECT symbol, close as prev_close,
+                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
+                FROM interval_1d_technical
+                WHERE close IS NOT NULL
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE l.close > p.prev_close) as advancing,
+                COUNT(*) FILTER (WHERE l.close < p.prev_close) as declining,
+                COUNT(*) FILTER (WHERE l.close = p.prev_close) as unchanged,
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE l.close > l.sma60 AND l.sma60 IS NOT NULL) as above_sma50,
+                COUNT(*) FILTER (WHERE l.sma60 IS NOT NULL) as total_with_sma50,
+                COUNT(*) FILTER (WHERE l.close > l.sma250 AND l.sma250 IS NOT NULL) as above_sma200,
+                COUNT(*) FILTER (WHERE l.sma250 IS NOT NULL) as total_with_sma200
+            FROM latest l
+            JOIN prev p ON l.symbol = p.symbol AND p.rn = 2
+            WHERE l.rn = 1
+        """
+        async with self.db.pool.acquire() as conn:
+            row = await conn.fetchrow(query)
+        if not row:
+            return {}
+        total = row["total"] or 1
+        total_sma50 = row["total_with_sma50"] or 1
+        total_sma200 = row["total_with_sma200"] or 1
+        return {
+            "advancing": row["advancing"],
+            "declining": row["declining"],
+            "unchanged": row["unchanged"],
+            "total": total,
+            "advance_decline_ratio": round(row["advancing"] / max(row["declining"], 1), 2),
+            "pct_above_sma50": round(row["above_sma50"] / total_sma50 * 100, 1),
+            "pct_above_sma200": round(row["above_sma200"] / total_sma200 * 100, 1),
+        }
+
+    async def get_sector_performance(self, sector_map: Dict[str, str]) -> list:
+        """Given {symbol: sector} map, compute avg daily return per sector."""
+        if not sector_map:
+            return []
+        query = """
+            WITH latest_two AS (
+                SELECT symbol, close,
+                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
+                FROM interval_1d_technical
+                WHERE close IS NOT NULL
+            )
+            SELECT a.symbol,
+                   CASE WHEN b.close > 0
+                        THEN (a.close - b.close) / b.close * 100
+                        ELSE 0 END as change_pct
+            FROM latest_two a
+            JOIN latest_two b ON a.symbol = b.symbol AND b.rn = 2
+            WHERE a.rn = 1
+        """
+        async with self.db.pool.acquire() as conn:
+            rows = await conn.fetch(query)
+        from collections import defaultdict
+        sector_returns = defaultdict(list)
+        for row in rows:
+            sector = sector_map.get(row["symbol"])
+            if sector:
+                sector_returns[sector].append(float(row["change_pct"]))
+        result = []
+        for sector, returns in sector_returns.items():
+            avg = round(sum(returns) / len(returns), 2) if returns else 0
+            result.append({"sector": sector, "avg_change_pct": avg, "stock_count": len(returns)})
+        result.sort(key=lambda x: x["avg_change_pct"], reverse=True)
+        return result
+
     async def save_technical_data(self, symbol: str, interval: str, technical_data: Dict[str, Any]) -> bool:
         """Save OHLCV data and technical indicators to PostgreSQL"""
         try:

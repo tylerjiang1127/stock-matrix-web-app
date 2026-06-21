@@ -10,22 +10,29 @@ class StockDataRetriever:
     def __init__(self):
         self.technical_data_repo = SimpleTechnicalDataRepository(postgres_db)
     
-    async def get_stock_technical_data(self, symbol: str, interval: str) -> Dict[str, Any]:
+    DEFAULT_LOOKBACK = {
+        '1m': 1, '5m': 5, '15m': 10, '30m': 20, '60m': 30,
+        '1d': 365, '1wk': 730, '1mo': 1825,
+    }
+
+    async def get_stock_technical_data(self, symbol: str, interval: str, days: int = None) -> Dict[str, Any]:
         """Get stock technical data from PostgreSQL"""
         try:
             table_name = self.technical_data_repo.interval_tables.get(interval)
             if not table_name:
                 print(f"❌ Unknown interval: {interval}")
                 return None
-            
+
+            if days is None:
+                days = self.DEFAULT_LOOKBACK.get(interval, 365)
+
             async with postgres_db.pool.acquire() as connection:
-                # Get all data for the symbol
                 query = f"""
-                SELECT * FROM {table_name} 
-                WHERE symbol = $1 
+                SELECT * FROM {table_name}
+                WHERE symbol = $1 AND datetime_index >= NOW() - INTERVAL '{days} days'
                 ORDER BY datetime_index ASC
                 """
-                
+
                 rows = await connection.fetch(query, symbol)
                 
                 if not rows:

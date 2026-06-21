@@ -46,6 +46,25 @@ class StockListRepository:
             print(f"❌ Error creating stock list: {e}")
             return False
 
+    async def upsert_stocks(self, stocks: List[Dict[str, Any]]) -> int:
+        """Add new stocks or update existing ones. Returns count of newly added stocks."""
+        added = 0
+        for stock in stocks:
+            result = await self.collection.update_one(
+                {'symbol': stock['symbol']},
+                {'$setOnInsert': {
+                    'name': stock.get('name', stock['symbol']),
+                    'exchange': stock.get('exchange', 'UNKNOWN'),
+                    'market_cap': stock.get('market_cap'),
+                    'created_at': datetime.now(),
+                    'updated_at': datetime.now(),
+                }},
+                upsert=True,
+            )
+            if result.upserted_id:
+                added += 1
+        return added
+
     async def get_all_stocks(self) -> List[StockListModel]:
         """Get all stocks from database"""
         try:
@@ -222,5 +241,85 @@ class StockMetadataRepository:
                             processed[interval][data_type][sub_key] = convert_to_serializable(sub_value)
                 else:
                     processed[interval][data_type] = convert_to_serializable(data_value)
-        
+
         return processed
+
+
+class AIReportRepository:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.collection = db.ai_reports
+
+    async def ensure_indexes(self):
+        await self.collection.create_index(
+            [("date", 1), ("report_type", 1)], unique=True
+        )
+
+    async def save_report(self, report: Dict[str, Any]) -> str:
+        report["created_at"] = datetime.utcnow()
+        result = await self.collection.replace_one(
+            {"date": report["date"], "report_type": report.get("report_type", "daily")},
+            report,
+            upsert=True,
+        )
+        return str(result.upserted_id or "updated")
+
+    async def get_report(self, date: str) -> Optional[Dict]:
+        return await self.collection.find_one(
+            {"date": date}, {"_id": 0}
+        )
+
+    async def delete_report(self, date: str) -> bool:
+        result = await self.collection.delete_one({"date": date})
+        return result.deleted_count > 0
+
+    async def list_reports(self, limit: int = 30) -> List[Dict]:
+        cursor = self.collection.find(
+            {},
+            {"_id": 0, "date": 1, "report_type": 1,
+             "sections.executive_summary": 1, "sections.market_mood": 1,
+             "created_at": 1},
+        ).sort("date", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+
+
+class AIConversationRepository:
+    def __init__(self, db: AsyncIOMotorDatabase):
+        self.db = db
+        self.collection = db.ai_conversations
+
+    async def ensure_indexes(self):
+        await self.collection.create_index("conversation_id", unique=True)
+        await self.collection.create_index([("user_id", 1), ("updated_at", -1)])
+
+    async def save_conversation(self, conversation_id: str, user_id: str,
+                                 messages: List[Dict]) -> None:
+        await self.collection.update_one(
+            {"conversation_id": conversation_id},
+            {
+                "$set": {
+                    "user_id": user_id,
+                    "messages": messages,
+                    "updated_at": datetime.utcnow(),
+                },
+                "$setOnInsert": {"created_at": datetime.utcnow()},
+            },
+            upsert=True,
+        )
+
+    async def get_conversation(self, conversation_id: str) -> Optional[Dict]:
+        return await self.collection.find_one(
+            {"conversation_id": conversation_id}, {"_id": 0}
+        )
+
+    async def list_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
+        cursor = self.collection.find(
+            {"user_id": user_id},
+            {"_id": 0, "conversation_id": 1, "updated_at": 1,
+             "messages": {"$slice": 1}},
+        ).sort("updated_at", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        result = await self.collection.delete_one({"conversation_id": conversation_id})
+        return result.deleted_count > 0

@@ -2,7 +2,7 @@
 Redis database connection and configuration for caching
 """
 
-import aioredis
+import redis.asyncio as aioredis
 import json
 from typing import Optional, Any, Dict
 import os
@@ -14,7 +14,7 @@ load_dotenv()
 class RedisDatabase:
     def __init__(self):
         self.redis: Optional[aioredis.Redis] = None
-        
+
     async def connect(self):
         """Connect to Redis database"""
         try:

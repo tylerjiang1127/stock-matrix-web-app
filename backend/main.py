@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -7,12 +7,21 @@ import numpy as np
 from datetime import datetime, timedelta
 import json
 import asyncio
+import os
 
 from database_init import db_initializer
 from stock_metadata_fetcher import StockMetaDataFetcher
 from postgres_data_retrieval import stock_data_retriever
-from redis_database import cache_manager
+from redis_database import cache_manager, redis_db
 from auth_routes import auth_router
+from data_sources import (
+    AlphaVantageAdapter, YFinanceAdapter, FinnhubAdapter,
+    DataValidator, HealthMonitor, DataSourceManager,
+)
+from data_sources.nightly_pipeline import NightlyPipeline
+from data_sources.realtime_service import RealtimeService
+from data_sources.data_initializer import DataInitializer
+from ai.ai_router import ai_router
 
 app = FastAPI(
     title="Stock Matrix API", 
@@ -20,8 +29,9 @@ app = FastAPI(
     description="Stock Matrix - See Through The Market"
 )
 
-# Include authentication router
+# Include routers
 app.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
+app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
 
 # CORS settings
 app.add_middleware(
@@ -53,6 +63,7 @@ class DatabaseStockRequest(BaseModel):
     interval: str = "1d"
     ma_options: str = "sma"
     tech_ind: str = "macd"
+    days: Optional[int] = None
 
 class DatabaseInitRequest(BaseModel):
     alpha_vantage_api_key: str
@@ -67,10 +78,177 @@ class ChartDataResponse(BaseModel):
     company_info: Dict[str, Any]
     chart_config: Dict[str, Any]
 
-# global variable to store API key
-# ALPHA_VANTAGE_API_KEY = "EX9111YGBHZ73GG9"
-# ALPHA_VANTAGE_API_KEY = 'Y3U65MR1HAWZU87H'
-ALPHA_VANTAGE_API_KEY = 'RMHG7PHKL60I5W5V'
+ALPHA_VANTAGE_API_KEY = os.getenv('ALPHA_VANTAGE_API_KEY', '')
+
+@app.on_event("startup")
+async def startup_data_sources():
+    av_adapter = AlphaVantageAdapter(api_key=ALPHA_VANTAGE_API_KEY)
+    yf_adapter = YFinanceAdapter()
+    fh_adapter = FinnhubAdapter(api_key=os.getenv('FINNHUB_API_KEY', ''))
+    validator = DataValidator()
+    health = HealthMonitor(redis_db)
+    dsm = DataSourceManager(
+        adapters=[av_adapter, yf_adapter, fh_adapter],
+        validator=validator,
+        health_monitor=health,
+    )
+    app.state.data_source_manager = dsm
+
+    await db_initializer.initialize_repositories()
+    from simple_postgres_models import SimpleTechnicalDataRepository
+    from postgres_database import postgres_db
+    from database import db as db_conn
+    pg_repo = SimpleTechnicalDataRepository(postgres_db)
+    app.state.pg_repo = pg_repo
+    mongo_db = db_conn.mongodb_db if hasattr(db_conn, 'mongodb_db') else None
+
+    metadata_repo = db_initializer.stock_metadata_repo \
+        if hasattr(db_initializer, 'stock_metadata_repo') else None
+
+    app.state.nightly_pipeline = NightlyPipeline(
+        data_source_manager=dsm,
+        pg_repo=pg_repo,
+        stock_list_repo=db_initializer.stock_list_repo,
+        mongo_db=mongo_db,
+        stock_metadata_repo=metadata_repo,
+    )
+
+    app.state.data_initializer = DataInitializer(
+        data_source_manager=dsm,
+        pg_repo=pg_repo,
+        stock_list_repo=db_initializer.stock_list_repo,
+        mongo_db=mongo_db,
+        stock_metadata_repo=metadata_repo,
+    )
+    app.state.init_status = 'pending'
+
+    # ── AI layer init ──────────────────────────────────
+    deepseek_key = os.getenv("DEEPSEEK_API_KEY", "")
+    if deepseek_key:
+        from ai.deepseek_client import DeepseekClient
+        from ai.report.report_generator import ReportGenerator
+        from repositories import AIReportRepository
+
+        ai_client = DeepseekClient(
+            api_key=deepseek_key,
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+        )
+        app.state.ai_client = ai_client
+
+        mongo_db = db_conn.mongodb_db if hasattr(db_conn, "mongodb_db") else None
+        if mongo_db is not None:
+            ai_report_repo = AIReportRepository(mongo_db)
+            await ai_report_repo.ensure_indexes()
+            app.state.ai_report_repo = ai_report_repo
+
+            app.state.report_generator = ReportGenerator(
+                ai_client=ai_client,
+                pg_repo=pg_repo,
+                stock_metadata_repo=db_initializer.stock_metadata_repo
+                    if hasattr(db_initializer, "stock_metadata_repo") else None,
+                report_repo=ai_report_repo,
+            )
+            print("AI report engine initialized (Deepseek)")
+
+            # ── Chat agent ────────────────────────────────
+            from ai.tools.stock_data_tools import ToolRegistry
+            from ai.chat.chat_agent import ChatAgent
+            from repositories import AIConversationRepository
+
+            tool_registry = ToolRegistry(
+                pg_repo=pg_repo,
+                stock_metadata_repo=db_initializer.stock_metadata_repo
+                    if hasattr(db_initializer, "stock_metadata_repo") else None,
+                data_source_manager=dsm,
+            )
+            conv_repo = AIConversationRepository(mongo_db)
+            await conv_repo.ensure_indexes()
+            app.state.ai_conversation_repo = conv_repo
+
+            app.state.chat_agent = ChatAgent(
+                ai_client=ai_client,
+                tool_registry=tool_registry,
+                conversation_repo=conv_repo,
+            )
+            print("AI chat agent initialized")
+
+            # ── NL Screener ──────────────────────────────
+            from ai.screener.nl_screener import NLScreener
+            app.state.nl_screener = NLScreener(
+                ai_client=ai_client,
+                pg_repo=pg_repo,
+                data_source_manager=dsm,
+            )
+            print("AI NL screener initialized")
+        else:
+            app.state.ai_report_repo = None
+            app.state.report_generator = None
+            app.state.chat_agent = None
+            app.state.ai_conversation_repo = None
+            app.state.nl_screener = None
+            print("AI features skipped (MongoDB not connected)")
+    else:
+        app.state.ai_client = None
+        app.state.ai_report_repo = None
+        app.state.report_generator = None
+        app.state.chat_agent = None
+        app.state.ai_conversation_repo = None
+        app.state.nl_screener = None
+        print("AI features disabled (no DEEPSEEK_API_KEY)")
+
+    # ── Real-time service ─────────────────────────────
+    app.state.realtime_service = RealtimeService()
+    app.state.realtime_service.start()
+    print("Real-time stock data service started (polls during market hours)")
+
+    # ── Scheduler ──────────────────────────────────────
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+        from apscheduler.triggers.cron import CronTrigger
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(
+            app.state.nightly_pipeline.run_nightly_update,
+            CronTrigger(hour=17, minute=0, timezone='US/Eastern', day_of_week='mon-fri'),
+            id='nightly_pipeline',
+            replace_existing=True,
+        )
+        print("Nightly pipeline scheduled at 5:00 PM ET (Mon-Fri)")
+
+        if getattr(app.state, "report_generator", None):
+            scheduler.add_job(
+                app.state.report_generator.generate_daily_report,
+                CronTrigger(
+                    hour=19, minute=0, timezone='US/Eastern',
+                    day_of_week='mon-fri',
+                ),
+                id='daily_macro_report',
+                replace_existing=True,
+            )
+            print("AI Macro Daily Report scheduled at 7:00 PM ET (Mon-Fri)")
+
+        scheduler.start()
+        app.state.scheduler = scheduler
+    except Exception as e:
+        print(f"APScheduler not available, nightly cron disabled: {e}")
+
+    # ── Auto-initialization on first launch ───────────
+    async def _auto_init():
+        initializer = app.state.data_initializer
+        if await initializer.needs_initialization():
+            print("\n[Startup] Database is empty — starting initialization...")
+            app.state.init_status = 'running'
+            try:
+                result = await initializer.run()
+                app.state.init_status = result.get('status', 'completed')
+                print(f"[Startup] Initialization {app.state.init_status}")
+            except Exception as e:
+                app.state.init_status = 'failed'
+                print(f"[Startup] Initialization failed: {e}")
+        else:
+            app.state.init_status = 'completed'
+            print("[Startup] Database already initialized, skipping")
+
+    asyncio.create_task(_auto_init())
 
 # data conversion tool functions
 class DataTransformer:
@@ -444,205 +622,38 @@ async def get_stocks():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching stocks: {str(e)}")
 
-@app.post("/api/stocks/{symbol}")
-async def get_stock_data(symbol: str, request: DatabaseStockRequest):
-    """Get stock data from database with Redis caching"""
+@app.post("/api/stocks/{symbol}/chart")
+async def get_stock_chart(symbol: str, request: DatabaseStockRequest):
+    """Fast chart data from PG only — renders in <0.1s"""
     try:
         await db_initializer.initialize_repositories()
-        
-        # Create cache key based on symbol and request parameters
-        cache_key = f"{symbol}:{request.interval}:{request.ma_options}:{request.tech_ind}"
-        
-        # Try to get from Redis cache first
-        try:
-            cached_data = await cache_manager.get_cached_technical_data(symbol, cache_key)
-            if cached_data:
-                print(f"🚀 Cache hit for {symbol} - serving from Redis")
-                return cached_data
-        except Exception as cache_error:
-            print(f"⚠️ Redis cache read error: {cache_error}")
-            # Continue to fetch from database if cache fails
-        
-        print(f"💾 Cache miss for {symbol} - fetching from database")
-        
-        # --- Fundamental Data Logic (On-demand) ---
-        loop = asyncio.get_event_loop()
-        
-        # 1. Company Overview (Always fetch fresh on demand, do NOT save to DB)
-        # Create fetcher (fetch_price=False to skip price data)
-        fetcher = await loop.run_in_executor(
-            None, 
-            lambda: StockMetaDataFetcher(symbol, ALPHA_VANTAGE_API_KEY, fetch_price=False)
-        )
-        
-        await loop.run_in_executor(None, fetcher.fetch_company_overview)
-        company_overview = fetcher.stock_metadata.get('company_overview', {})
-        
-        # 1.5. News & Sentiment (Always fetch fresh on demand)
-        news_sentiment = await loop.run_in_executor(None, fetcher.fetch_news_sentiment, 50)
-        
-        # 2. Financial Statements
-        # Check existing data in MongoDB
-        existing_metadata = await db_initializer.stock_metadata_repo.get_stock_metadata(symbol)
-        if existing_metadata is None:
-            existing_metadata = {'ticker': symbol}
-            
-        stock_fundamental = existing_metadata.get('stock_fundamental', {})
-        
-        need_fetch_financials = False
-        if not stock_fundamental:
-            print(f"📊 No existing financials for {symbol}, fetching...")
-            need_fetch_financials = True
-        else:
-            # Check if data is outdated (> 3 months)
-            try:
-                # Check quarterly income statement date (more frequent updates)
-                quarterly = stock_fundamental.get('quarterly', {})
-                income = quarterly.get('income_statement', {})
-                # income is a dict with 'data' list (processed) or empty
-                data_list = income.get('data', []) if isinstance(income, dict) else []
-                
-                if data_list and len(data_list) > 0:
-                    last_date_val = data_list[0].get('fiscalDateEnding')
-                    if last_date_val:
-                        if isinstance(last_date_val, str):
-                            last_date = datetime.strptime(last_date_val, '%Y-%m-%d')
-                        elif isinstance(last_date_val, datetime):
-                            last_date = last_date_val
-                        else:
-                            # Should not happen typically, but treat as invalid to trigger fetch
-                            print(f"⚠️ Unexpected date type for fiscalDateEnding: {type(last_date_val)}")
-                            need_fetch_financials = True
-                            last_date = None
 
-                        if last_date:
-                            # Check if older than 3 months (approx 100 days to be safe)
-                            if datetime.now() - last_date > timedelta(days=100): 
-                                 print(f"📊 Financials outdated ({last_date}), fetching new data...")
-                                 need_fetch_financials = True
-                            else:
-                                 print(f"✅ Financials up-to-date ({last_date})")
-                    else:
-                        need_fetch_financials = True
-                else:
-                    need_fetch_financials = True
-            except Exception as e:
-                print(f"⚠️ Error checking financial date: {e}, fetching new data...")
-                need_fetch_financials = True
-        
-        if need_fetch_financials:
-             print(f"🔄 Fetching fresh financial statements for {symbol}...")
-             await loop.run_in_executor(None, fetcher.fetch_fundamental_data)
-             
-             # Get the freshly fetched data
-             new_fundamental = fetcher.stock_metadata.get('stock_fundamental', {})
-             
-             # Check if the new data has any actual content (not just empty DataFrames)
-             has_income = False
-             has_balance = False  
-             has_cashflow = False
-             
-             for period in ['annual', 'quarterly']:
-                 if period in new_fundamental:
-                     income = new_fundamental[period].get('income_statement')
-                     balance = new_fundamental[period].get('balance_sheet')
-                     cashflow = new_fundamental[period].get('cash_flow')
-                     
-                     if isinstance(income, pd.DataFrame) and not income.empty:
-                         has_income = True
-                     if isinstance(balance, pd.DataFrame) and not balance.empty:
-                         has_balance = True
-                     if isinstance(cashflow, pd.DataFrame) and not cashflow.empty:
-                         has_cashflow = True
-             
-             # Only update if we got at least some data (to prevent overwriting good data with empty)
-             if has_income or has_balance or has_cashflow:
-                 print(f"✅ Got fundamental data: income={has_income}, balance={has_balance}, cashflow={has_cashflow}")
-                 
-                 # Merge new data with existing - only update non-empty statements
-                 old_fundamental = existing_metadata.get('stock_fundamental', {})
-                 
-                 for period in ['annual', 'quarterly']:
-                     if period not in old_fundamental:
-                         old_fundamental[period] = {}
-                     if period in new_fundamental:
-                         for statement_type in ['income_statement', 'balance_sheet', 'cash_flow']:
-                             new_stmt = new_fundamental[period].get(statement_type)
-                             if isinstance(new_stmt, pd.DataFrame) and not new_stmt.empty:
-                                 old_fundamental[period][statement_type] = new_stmt
-                 
-                 existing_metadata['stock_fundamental'] = old_fundamental
-                 
-                 # Save to MongoDB
-                 await db_initializer.stock_metadata_repo.create_or_update_stock_metadata(symbol, existing_metadata)
-             else:
-                 print(f"⚠️ All fundamental data came back empty (likely rate limited), keeping existing data")
-        
-        # Get technical data from PostgreSQL
         technical_data = await stock_data_retriever.get_stock_technical_data(
-            symbol, request.interval
+            symbol, request.interval, days=request.days
         )
-        
+
+        if not technical_data and request.interval in ('1m', '5m', '15m', '30m', '60m'):
+            dsm = app.state.data_source_manager
+            from data_sources.indicator_calculator import IndicatorCalculator
+            calc = IndicatorCalculator()
+            ohlcv = await dsm.fetch_ohlcv(symbol, request.interval)
+            if ohlcv.success and ohlcv.data is not None and not ohlcv.data.empty:
+                indicators = calc.compute_all_indicators(ohlcv.data, request.interval)
+                await app.state.pg_repo.save_technical_data(
+                    symbol, request.interval, indicators
+                )
+                technical_data = await stock_data_retriever.get_stock_technical_data(
+                    symbol, request.interval, days=request.days
+                )
+
         if not technical_data:
             raise HTTPException(status_code=404, detail=f"No data found for {symbol}")
-        
-        # Prepare fundamental data for frontend
-        # Get the final stock_fundamental (either from existing_metadata or just fetched)
-        final_stock_fundamental = existing_metadata.get('stock_fundamental', {})
-        
-        # Convert DataFrame format to frontend-compatible format if needed
-        formatted_fundamental = {}
-        for period in ['annual', 'quarterly']:
-            if period in final_stock_fundamental:
-                formatted_fundamental[period] = {}
-                for statement_type in ['income_statement', 'balance_sheet', 'cash_flow']:
-                    statement_data = final_stock_fundamental[period].get(statement_type, {})
-                    
-                    # Check if it's a DataFrame (from fresh API fetch)
-                    if isinstance(statement_data, pd.DataFrame):
-                        if not statement_data.empty:
-                            # Convert DataFrame to dict format
-                            try:
-                                records = statement_data.to_dict('records')
-                                formatted_fundamental[period][statement_type] = {
-                                    'data': records,
-                                    'columns': statement_data.columns.tolist(),
-                                    'index': statement_data.index.tolist()
-                                }
-                                # Debug: log first record to verify field names
-                                if records and len(records) > 0:
-                                    print(f"✅ Converted {period} {statement_type} DataFrame to dict format ({len(records)} records)")
-                                    print(f"   First record keys: {list(records[0].keys())[:5]}...")  # Show first 5 keys
-                                    print(f"   Sample values: Total Revenue={records[0].get('Total Revenue', 'N/A')}, Net Income={records[0].get('Net Income', 'N/A')}")
-                            except Exception as e:
-                                print(f"⚠️ Error converting {period} {statement_type} DataFrame: {e}")
-                                formatted_fundamental[period][statement_type] = {}
-                        else:
-                            formatted_fundamental[period][statement_type] = {}
-                            print(f"⚠️ {period} {statement_type} DataFrame is empty")
-                    # Check if it's already in MongoDB format (dict with 'data' key)
-                    elif isinstance(statement_data, dict):
-                        if 'data' in statement_data:
-                            # Already in correct format
-                            formatted_fundamental[period][statement_type] = statement_data
-                            data_count = len(statement_data.get('data', []))
-                            print(f"✅ Using existing {period} {statement_type} from MongoDB ({data_count} records)")
-                        else:
-                            formatted_fundamental[period][statement_type] = {}
-                            print(f"⚠️ {period} {statement_type} dict format missing 'data' key")
-                    else:
-                        formatted_fundamental[period][statement_type] = {}
-                        print(f"⚠️ {period} {statement_type} has unexpected type: {type(statement_data)}")
-        
-        # Format data for frontend (similar to original API response)
-        response_data = {
+
+        return {
             "candlestick_data": technical_data.get("candlestick_data", []),
             "volume_data": technical_data.get("volume_data", []),
             "ma_data": technical_data.get("ma_data", {}),
             "technical_data": technical_data.get("technical_data", {}),
-            "company_info": company_overview, # Use the fresh on-demand overview
-            "fundamental_data": formatted_fundamental, # Add formatted fundamental data
-            "news_sentiment": news_sentiment, # News & sentiment data
             "chart_config": {
                 "ticker": symbol,
                 "interval": request.interval,
@@ -651,20 +662,207 @@ async def get_stock_data(symbol: str, request: DatabaseStockRequest):
                 "time_ranges": DataTransformer.get_time_ranges(request.interval)
             }
         }
-        
-        # Cache the response data in Redis for future requests
-        # Expire after 30 minutes (1800 seconds) for fresh data
-        try:
-            await cache_manager.cache_technical_data(symbol, cache_key, response_data, expire=1800)
-            print(f"📦 Cached {symbol} data in Redis (expires in 30 min)")
-        except Exception as cache_error:
-            print(f"⚠️ Failed to cache data in Redis: {cache_error}")
-            # Don't fail the request if caching fails
-        
-        return response_data
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching stock data: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error fetching chart data: {str(e)}")
+
+
+@app.get("/api/stocks/{symbol}/info")
+async def get_stock_info(symbol: str):
+    """Company overview + news + fundamentals — cached in MongoDB, parallel fetch"""
+    try:
+        await db_initializer.initialize_repositories()
+        dsm = app.state.data_source_manager
+        metadata_repo = db_initializer.stock_metadata_repo
+
+        existing_metadata = await metadata_repo.get_stock_metadata(symbol) or {'ticker': symbol}
+
+        # --- Parallel: overview, news, fundamentals stale-check ---
+        async def get_overview():
+            cached = existing_metadata.get('company_overview')
+            if cached and cached.get('longName'):
+                return cached
+            result = await dsm.fetch_company_overview(symbol)
+            if result.success and result.data:
+                existing_metadata['company_overview'] = result.data
+                return result.data
+            return cached or {'symbol': symbol}
+
+        async def get_news():
+            cached = existing_metadata.get('news_sentiment')
+            if cached and cached.get('fetched_at'):
+                age = (datetime.utcnow() - cached['fetched_at']).total_seconds()
+                if age < 86400:
+                    return cached
+            result = await dsm.fetch_news_sentiment(symbol)
+            if result.success and result.data:
+                news = result.data
+                news['fetched_at'] = datetime.utcnow()
+                existing_metadata['news_sentiment'] = news
+                return news
+            return cached or {
+                'average_sentiment_score': 0, 'average_sentiment_label': 'Neutral',
+                'total_articles': 0, 'articles': [],
+            }
+
+        async def get_fundamentals():
+            stock_fundamental = existing_metadata.get('stock_fundamental', {})
+            need_fetch = not stock_fundamental
+            if not need_fetch:
+                try:
+                    quarterly = stock_fundamental.get('quarterly', {})
+                    income = quarterly.get('income_statement', {})
+                    data_list = income.get('data', []) if isinstance(income, dict) else []
+                    if data_list:
+                        last_date_val = data_list[0].get('fiscalDateEnding')
+                        if isinstance(last_date_val, str):
+                            last_date = datetime.strptime(last_date_val[:10], '%Y-%m-%d')
+                        elif isinstance(last_date_val, datetime):
+                            last_date = last_date_val
+                        else:
+                            need_fetch = True
+                            last_date = None
+                        if last_date and (datetime.now() - last_date).days > 100:
+                            need_fetch = True
+                    else:
+                        need_fetch = True
+                except Exception:
+                    need_fetch = True
+
+            if need_fetch:
+                fund_result = await dsm.fetch_fundamentals(symbol)
+                new_fund = fund_result.data if fund_result.success else {}
+                old_fund = existing_metadata.get('stock_fundamental', {})
+                has_content = False
+                for period in ['annual', 'quarterly']:
+                    if period not in old_fund:
+                        old_fund[period] = {}
+                    if period in new_fund:
+                        for stmt in ['income_statement', 'balance_sheet', 'cash_flow']:
+                            new_stmt = new_fund[period].get(stmt)
+                            if isinstance(new_stmt, pd.DataFrame) and not new_stmt.empty:
+                                old_fund[period][stmt] = new_stmt
+                                has_content = True
+                if has_content:
+                    existing_metadata['stock_fundamental'] = old_fund
+                stock_fundamental = existing_metadata.get('stock_fundamental', {})
+
+            return stock_fundamental
+
+        company_overview, news_sentiment, stock_fundamental = await asyncio.gather(
+            get_overview(), get_news(), get_fundamentals()
+        )
+
+        # Save updated metadata back to MongoDB (background, don't block response)
+        asyncio.create_task(
+            metadata_repo.create_or_update_stock_metadata(symbol, existing_metadata)
+        )
+
+        # Format fundamentals for frontend
+        formatted_fundamental = {}
+        for period in ['annual', 'quarterly']:
+            if period in stock_fundamental:
+                formatted_fundamental[period] = {}
+                for statement_type in ['income_statement', 'balance_sheet', 'cash_flow']:
+                    statement_data = stock_fundamental[period].get(statement_type, {})
+                    if isinstance(statement_data, pd.DataFrame):
+                        if not statement_data.empty:
+                            try:
+                                records = statement_data.to_dict('records')
+                                formatted_fundamental[period][statement_type] = {
+                                    'data': records,
+                                    'columns': statement_data.columns.tolist(),
+                                    'index': statement_data.index.tolist()
+                                }
+                            except Exception:
+                                formatted_fundamental[period][statement_type] = {}
+                        else:
+                            formatted_fundamental[period][statement_type] = {}
+                    elif isinstance(statement_data, dict) and 'data' in statement_data:
+                        formatted_fundamental[period][statement_type] = statement_data
+                    else:
+                        formatted_fundamental[period][statement_type] = {}
+
+        return {
+            "company_info": company_overview,
+            "news_sentiment": news_sentiment,
+            "fundamental_data": formatted_fundamental,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching stock info: {str(e)}")
+
+
+# Keep legacy endpoint for backwards compatibility
+@app.post("/api/stocks/{symbol}")
+async def get_stock_data(symbol: str, request: DatabaseStockRequest):
+    """Legacy combined endpoint — calls chart + info internally"""
+    chart_task = get_stock_chart(symbol, request)
+    info_task = get_stock_info(symbol)
+    chart_data, info_data = await asyncio.gather(chart_task, info_task)
+    return {**chart_data, **info_data}
+
+
+@app.get("/api/health/sources")
+async def get_source_health():
+    dsm = app.state.data_source_manager
+    return await dsm.get_all_health()
+
+
+@app.websocket("/ws/realtime")
+async def realtime_websocket(ws: WebSocket):
+    svc: RealtimeService = app.state.realtime_service
+    await svc.connect(ws)
+    try:
+        while True:
+            data = await ws.receive_json()
+            await svc.handle_message(ws, data)
+    except WebSocketDisconnect:
+        svc.disconnect(ws)
+    except Exception:
+        svc.disconnect(ws)
+
+
+@app.get("/api/init/status")
+async def get_init_status():
+    return {"status": app.state.init_status}
+
+
+@app.post("/api/init/run")
+async def trigger_initialization(background_tasks: BackgroundTasks):
+    if app.state.init_status == 'running':
+        return {"status": "already_running"}
+    app.state.init_status = 'running'
+    background_tasks.add_task(_run_init_background)
+    return {"status": "started", "message": "Initialization started in background"}
+
+
+async def _run_init_background():
+    try:
+        result = await app.state.data_initializer.run()
+        app.state.init_status = result.get('status', 'completed')
+    except Exception as e:
+        app.state.init_status = 'failed'
+        print(f"Background initialization failed: {e}")
+
+
+@app.post("/api/pipeline/nightly")
+async def trigger_nightly_pipeline(background_tasks: BackgroundTasks):
+    pipeline = app.state.nightly_pipeline
+    background_tasks.add_task(pipeline.run_nightly_update)
+    return {"status": "started", "message": "Nightly pipeline triggered in background"}
+
+
+@app.get("/api/pipeline/history")
+async def get_pipeline_history():
+    from database import db as db_conn
+    mongo_db = db_conn.mongodb_db if hasattr(db_conn, 'mongodb_db') else None
+    if mongo_db is None:
+        return []
+    cursor = mongo_db['pipeline_runs'].find(
+        {}, {'_id': 0}
+    ).sort('started_at', -1).limit(20)
+    return [doc async for doc in cursor]
 
 
 if __name__ == "__main__":
