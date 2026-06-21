@@ -6,6 +6,10 @@ import MatrixBackground from './components/MatrixBackground';
 import UserMenu from './components/Auth/UserMenu';
 import VerifyEmailPage from './components/Auth/VerifyEmailPage';
 import ResetPasswordPage from './components/Auth/ResetPasswordPage';
+import Sidebar from './components/Navigation/Sidebar';
+import DailyIntelligence from './components/AI/DailyIntelligence';
+import ChatPanel from './components/AI/ChatPanel';
+import Screener from './components/AI/Screener';
 import './components/StockChart.css';
 
 function App() {
@@ -15,15 +19,23 @@ function App() {
                 <div className="App">
                     <MatrixBackground />
                     <UserMenu />
-                    <Routes>
-                        <Route path="/" element={
-                            <main>
-                                <StockChart />
-                            </main>
-                        } />
-                        <Route path="/verify-email" element={<VerifyEmailPage />} />
-                        <Route path="/reset-password" element={<ResetPasswordPage />} />
-                    </Routes>
+                    <ChatPanel />
+                    <div className="app-layout">
+                        <Sidebar />
+                        <div className="app-main-content">
+                            <Routes>
+                                <Route path="/" element={
+                                    <main>
+                                        <StockChart />
+                                    </main>
+                                } />
+                                <Route path="/intelligence" element={<DailyIntelligence />} />
+                                <Route path="/screener" element={<Screener />} />
+                                <Route path="/verify-email" element={<VerifyEmailPage />} />
+                                <Route path="/reset-password" element={<ResetPasswordPage />} />
+                            </Routes>
+                        </div>
+                    </div>
                 </div>
             </AuthProvider>
         </BrowserRouter>
