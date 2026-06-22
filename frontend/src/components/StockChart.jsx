@@ -847,25 +847,6 @@ const StockChart = () => {
         fetchStockData({ [key]: value }, scope);
     };
 
-    // Handle immediate changes for Interval, MA, and Tech Ind
-    // Updates state AND triggers fetch immediately
-    const handleImmediateChange = (key, value) => {
-        // 1. Update form state
-        setSearchParams(prev => ({
-            ...prev,
-            [key]: value
-        }));
-
-        // 2. Determine loading scope
-        let scope = 'charts'; // Default to charts scope (interval changes)
-        if (key === 'ma_options') scope = 'ma';
-        if (key === 'tech_ind') scope = 'tech';
-        // Note: interval changes use 'charts' scope to avoid reloading company info
-
-        // 3. Trigger fetch immediately with new value
-        fetchStockData({ [key]: value }, scope);
-    };
-
     // Initial data fetch
     useEffect(() => {
         fetchStockList(); // Load stock list first
@@ -2228,40 +2209,6 @@ useEffect(() => {
     }
 }, [processedFundamentalData]);
 
-    // Helper to align chart widths
-    const alignChartWidths = () => {
-        if (!priceChart.current || !volumeChart.current || !priceChartRef.current || !volumeChartRef.current) return;
-        
-        setTimeout(() => {
-            try {
-                // Sync visible time range
-                const priceTimeScale = priceChart.current.timeScale();
-                const priceRange = priceTimeScale.getVisibleRange();
-                if (priceRange) {
-                    volumeChart.current.timeScale().setVisibleRange(priceRange);
-                }
-                
-                // Get the actual canvas widths and adjust volume chart to match price chart
-                const priceCanvas = priceChartRef.current?.querySelector('canvas');
-                const volumeCanvas = volumeChartRef.current?.querySelector('canvas');
-                
-                if (priceCanvas && volumeCanvas) {
-                    const priceRect = priceCanvas.getBoundingClientRect();
-                    const volumeRect = volumeCanvas.getBoundingClientRect();
-                    const widthDiff = priceRect.width - volumeRect.width;
-                    
-                    // Adjust volume chart width if there's a difference
-                    if (Math.abs(widthDiff) > 0) {
-                        const currentVolWidth = volumeChart.current.options().width;
-                        volumeChart.current.applyOptions({ width: currentVolWidth + widthDiff });
-                    }
-                }
-            } catch (e) {
-                // Silently handle sync errors
-            }
-        }, 100);
-    };
-
     const updateCharts = () => {
         if (!stockData) return;
 
@@ -2829,7 +2776,6 @@ useEffect(() => {
                         </div>
                     </div>
                 </div>
-            </header>
 
                 {/* Right Column: Charts */}
                 <div className="charts-column">
