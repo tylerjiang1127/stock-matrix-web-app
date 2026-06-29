@@ -133,6 +133,100 @@
     background: rgba(255, 68, 68, 0.12);
 }
 
+/* ===== Tab Bar ===== */
+.chat-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(77, 171, 247, 0.1);
+    overflow-x: auto;
+    flex-shrink: 0;
+    background: rgba(8, 8, 22, 0.6);
+    scrollbar-width: none;
+}
+
+.chat-tab-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.chat-tab {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px 4px 10px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: rgba(255, 255, 255, 0.04);
+    cursor: pointer;
+    flex-shrink: 0;
+    max-width: 160px;
+    transition: background 0.15s, border-color 0.15s;
+    position: relative;
+}
+
+.chat-tab:hover {
+    background: rgba(77, 171, 247, 0.08);
+    border-color: rgba(77, 171, 247, 0.15);
+}
+
+.chat-tab.active {
+    background: rgba(77, 171, 247, 0.12);
+    border-color: rgba(77, 171, 247, 0.3);
+}
+
+.chat-tab-title {
+    font-family: 'Raleway', sans-serif;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+}
+
+.chat-tab.active .chat-tab-title {
+    color: rgba(77, 171, 247, 0.9);
+}
+
+.chat-tab-close {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border: none;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.25);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 3px;
+    padding: 0;
+    transition: color 0.15s, background 0.15s;
+}
+
+.chat-tab-close:hover {
+    color: #ff6b6b;
+    background: rgba(255, 68, 68, 0.12);
+}
+
+.chat-tab-edit {
+    flex: 1;
+    min-width: 0;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(77, 171, 247, 0.4);
+    border-radius: 3px;
+    color: #e0e0e0;
+    font-family: 'Raleway', sans-serif;
+    font-size: 11px;
+    padding: 1px 4px;
+    outline: none;
+    width: 110px;
+}
+
 /* ===== Messages Area ===== */
 .chat-messages {
     flex: 1;
