@@ -3377,7 +3377,6 @@ useEffect(() => {
                         </div>
                     </div>
                 </div>
-            </header>
 
                 {/* Right Column: Charts */}
                 <div className="charts-column">
