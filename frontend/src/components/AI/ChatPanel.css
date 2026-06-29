@@ -241,6 +241,31 @@
     color: #ff6b6b;
 }
 
+/* Quota / register-to-unlock prompt */
+.chat-message.quota .chat-message-content {
+    border: 1px solid rgba(77, 171, 247, 0.35);
+    background: rgba(77, 171, 247, 0.08);
+    color: #c8d6e5;
+}
+
+.chat-register-cta {
+    margin-top: 10px;
+    padding: 9px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #4dabf7;
+    color: #fff;
+    font-family: 'Raleway', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.chat-register-cta:hover {
+    background: #339af0;
+}
+
 /* Markdown styling inside assistant messages */
 .chat-message.assistant .chat-message-content h1,
 .chat-message.assistant .chat-message-content h2,
@@ -329,72 +354,50 @@
     margin: 3px 0;
 }
 
-/* ===== Tool Call Cards ===== */
-.chat-tool-calls {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.tool-call-card {
+/* ===== AI Thinking Bar ===== */
+.chat-thinking-bar {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border-radius: 8px;
-    background: rgba(77, 171, 247, 0.06);
-    border: 1px solid rgba(77, 171, 247, 0.1);
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.5);
-    font-family: 'Raleway', sans-serif;
-}
-
-.tool-call-card.running {
-    border-color: rgba(77, 171, 247, 0.2);
-    color: #4dabf7;
-}
-
-.tool-call-card.done {
-    border-color: rgba(0, 255, 136, 0.15);
-    color: rgba(0, 255, 136, 0.6);
-}
-
-.tool-call-icon {
-    font-size: 13px;
-    flex-shrink: 0;
-}
-
-.tool-call-card.running .tool-call-icon {
-    animation: pulse-tool 1.2s ease-in-out infinite;
-}
-
-@keyframes pulse-tool {
-    0%, 100% { opacity: 0.5; }
-    50% { opacity: 1; }
-}
-
-/* ===== Typing Indicator ===== */
-.chat-typing {
-    display: flex;
-    gap: 4px;
+    gap: 10px;
     padding: 10px 16px;
+    margin: 4px 0;
+    background: rgba(77, 171, 247, 0.06);
+    border: 1px solid rgba(77, 171, 247, 0.12);
+    border-radius: 10px;
     align-self: flex-start;
 }
 
-.chat-typing span {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: rgba(77, 171, 247, 0.4);
-    animation: typing-dot 1.2s ease-in-out infinite;
+.chat-thinking-dots {
+    display: flex;
+    gap: 3px;
 }
 
-.chat-typing span:nth-child(2) { animation-delay: 0.15s; }
-.chat-typing span:nth-child(3) { animation-delay: 0.3s; }
+.chat-thinking-dots span {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #4dabf7;
+    animation: thinking-dot 1.2s ease-in-out infinite;
+}
 
-@keyframes typing-dot {
+.chat-thinking-dots span:nth-child(2) { animation-delay: 0.15s; }
+.chat-thinking-dots span:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes thinking-dot {
     0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
-    30% { opacity: 1; transform: translateY(-4px); }
+    30% { opacity: 1; transform: translateY(-3px); }
+}
+
+.chat-thinking-text {
+    font-family: 'Raleway', sans-serif;
+    font-size: 12px;
+    color: rgba(77, 171, 247, 0.7);
+    animation: thinking-pulse 2s ease-in-out infinite;
+}
+
+@keyframes thinking-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
 }
 
 /* ===== Input Area ===== */
@@ -455,4 +458,14 @@
 .chat-send-btn:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+}
+
+.chat-input:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    border-color: rgba(77, 171, 247, 0.08);
+}
+
+.chat-input:disabled::placeholder {
+    color: rgba(255, 255, 255, 0.12);
 }

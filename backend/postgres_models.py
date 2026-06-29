@@ -6,6 +6,7 @@ from typing import Dict, Any, Optional, List
 import pandas as pd
 from datetime import datetime
 import json
+import uuid
 
 class TechnicalDataRepository:
     def __init__(self, postgres_db):
@@ -315,18 +316,47 @@ class UserRepository:
     def __init__(self, postgres_db):
         self.db = postgres_db
     
-    async def create_user(self, email: str, username: str, password_hash: str) -> Optional[str]:
-        """Create a new user and return user_id"""
+    async def _unique_referral_code(self) -> str:
+        """Generate a referral code not already in use."""
+        from auth_utils import generate_referral_code
+        for _ in range(10):
+            code = generate_referral_code()
+            existing = await self.db.fetch_one(
+                "SELECT 1 FROM user_id_security WHERE referral_code = $1", code
+            )
+            if not existing:
+                return code
+        return generate_referral_code(12)  # astronomically unlikely fallback
+
+    async def create_user(self, email: str, username: str, password_hash: str,
+                          referred_by: Optional[str] = None) -> Optional[str]:
+        """Create a new user (with a generated referral code) and return user_id."""
         try:
+            referral_code = await self._unique_referral_code()
             query = """
-            INSERT INTO user_id_security (email, username, password_hash, is_email_verified, status)
-            VALUES ($1, $2, $3, FALSE, 'active')
+            INSERT INTO user_id_security
+                (email, username, password_hash, is_email_verified, status, referral_code, referred_by)
+            VALUES ($1, $2, $3, FALSE, 'active', $4, $5)
             RETURNING id
             """
-            result = await self.db.fetch_one(query, email, username, password_hash)
+            ref_uuid = uuid.UUID(referred_by) if referred_by else None
+            result = await self.db.fetch_one(
+                query, email, username, password_hash, referral_code, ref_uuid
+            )
             return str(result['id']) if result else None
         except Exception as e:
             print(f"❌ Error creating user: {e}")
+            return None
+
+    async def get_user_by_referral_code(self, code: str) -> Optional[Dict[str, Any]]:
+        """Resolve a referral code to its owner."""
+        try:
+            result = await self.db.fetch_one(
+                "SELECT * FROM user_id_security WHERE referral_code = $1", code
+            )
+            return dict(result) if result else None
+        except Exception as e:
+            print(f"❌ Error getting user by referral code: {e}")
             return None
     
     async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
@@ -387,6 +417,18 @@ class UserRepository:
             print(f"❌ Error updating password: {e}")
             return False
     
+    async def update_last_login(self, user_id: str) -> bool:
+        """Stamp the user's last login time (profile/activity)."""
+        try:
+            await self.db.execute_query(
+                "UPDATE user_id_security SET last_login_at = NOW() WHERE id = $1",
+                uuid.UUID(user_id) if isinstance(user_id, str) else user_id,
+            )
+            return True
+        except Exception as e:
+            print(f"❌ Error updating last login: {e}")
+            return False
+
     async def update_user_status(self, user_id: str, status: str) -> bool:
         """Update user status (active, banned, suspended, paused)"""
         try:

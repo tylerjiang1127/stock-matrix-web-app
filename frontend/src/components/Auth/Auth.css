@@ -256,6 +256,26 @@
     cursor: pointer;
 }
 
+.user-credits-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 5px 11px;
+    border-radius: 999px;
+    background: rgba(77, 171, 247, 0.12);
+    border: 1px solid rgba(77, 171, 247, 0.3);
+    color: #4dabf7;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+    white-space: nowrap;
+}
+
+.user-credits-chip:hover {
+    background: rgba(77, 171, 247, 0.22);
+}
+
 .auth-links {
     display: flex;
     gap: 15px;

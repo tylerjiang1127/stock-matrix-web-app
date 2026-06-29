@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import RegisterModal from './RegisterModal';
 import LoginModal from './LoginModal';
@@ -6,7 +7,8 @@ import ForgotPasswordModal from './ForgotPasswordModal';
 import './Auth.css';
 
 const UserMenu = () => {
-    const { user, isAuthenticated, logout, loading } = useAuth();
+    const { user, isAuthenticated, logout, loading, credits } = useAuth();
+    const navigate = useNavigate();
     const [showRegister, setShowRegister] = useState(false);
     const [showLogin, setShowLogin] = useState(false);
     const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -23,6 +25,20 @@ const UserMenu = () => {
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    // Allow any component (e.g. AI panels hitting a 402) to open the auth modal.
+    useEffect(() => {
+        const handler = (e) => {
+            const mode = e.detail?.mode;
+            if (mode === 'login') {
+                setShowLogin(true);
+            } else {
+                setShowRegister(true);
+            }
+        };
+        window.addEventListener('open-auth-modal', handler);
+        return () => window.removeEventListener('open-auth-modal', handler);
     }, []);
 
     const handleLogout = async () => {
@@ -44,7 +60,16 @@ const UserMenu = () => {
                     </div>
                 ) : (
                     <div className="user-menu-trigger">
-                        <div 
+                        {credits && (
+                            <span
+                                className="user-credits-chip"
+                                title="Matrix Credits (base + boost)"
+                                onClick={() => navigate('/profile')}
+                            >
+                                ⚡ {credits.total}
+                            </span>
+                        )}
+                        <div
                             className="user-avatar"
                             onClick={() => setShowDropdown(!showDropdown)}
                         >
@@ -63,13 +88,13 @@ const UserMenu = () => {
                                 </div>
 
                                 <ul className="user-dropdown-menu">
-                                    <li className="user-dropdown-item">
+                                    <li
+                                        className="user-dropdown-item"
+                                        onClick={() => { setShowDropdown(false); navigate('/profile'); }}
+                                    >
                                         👤 Profile
                                     </li>
-                                    <li className="user-dropdown-item">
-                                        ⚙️ Settings
-                                    </li>
-                                    <li 
+                                    <li
                                         className="user-dropdown-item logout"
                                         onClick={handleLogout}
                                     >

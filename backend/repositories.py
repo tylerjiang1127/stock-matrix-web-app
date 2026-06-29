@@ -1,6 +1,9 @@
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 import pandas as pd
 import numpy as np
 from models import StockListModel, StockMetadataModel
@@ -65,10 +68,11 @@ class StockListRepository:
                 added += 1
         return added
 
-    async def get_all_stocks(self) -> List[StockListModel]:
+    async def get_all_stocks(self, active_only: bool = True) -> List[StockListModel]:
         """Get all stocks from database"""
         try:
-            cursor = self.collection.find({})
+            query = {'active': {'$ne': False}} if active_only else {}
+            cursor = self.collection.find(query)
             stocks = []
             async for doc in cursor:
                 doc['id'] = str(doc['_id'])
@@ -89,6 +93,29 @@ class StockListRepository:
         except Exception as e:
             print(f"❌ Error getting stock by symbol: {e}")
             return None
+
+    async def record_failures(self, symbols: List[str]) -> None:
+        if not symbols:
+            return
+        await self.collection.update_many(
+            {'symbol': {'$in': symbols}},
+            {'$inc': {'consecutive_failures': 1}}
+        )
+
+    async def reset_failures(self, symbols: List[str]) -> None:
+        if not symbols:
+            return
+        await self.collection.update_many(
+            {'symbol': {'$in': symbols}},
+            {'$set': {'consecutive_failures': 0}}
+        )
+
+    async def prune_dead_symbols(self, max_failures: int = 5) -> int:
+        result = await self.collection.update_many(
+            {'consecutive_failures': {'$gte': max_failures}, 'active': {'$ne': False}},
+            {'$set': {'active': False}}
+        )
+        return result.modified_count
 
 class StockMetadataRepository:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -256,7 +283,7 @@ class AIReportRepository:
         )
 
     async def save_report(self, report: Dict[str, Any]) -> str:
-        report["created_at"] = datetime.utcnow()
+        report["created_at"] = datetime.now(_ET)
         result = await self.collection.replace_one(
             {"date": report["date"], "report_type": report.get("report_type", "daily")},
             report,
@@ -300,9 +327,9 @@ class AIConversationRepository:
                 "$set": {
                     "user_id": user_id,
                     "messages": messages,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": datetime.now(_ET),
                 },
-                "$setOnInsert": {"created_at": datetime.utcnow()},
+                "$setOnInsert": {"created_at": datetime.now(_ET)},
             },
             upsert=True,
         )

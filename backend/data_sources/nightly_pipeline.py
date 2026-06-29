@@ -7,6 +7,9 @@ import time
 import asyncio
 import pandas as pd
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 from typing import List, Dict, Any, Optional
 
 from data_sources.indicator_calculator import IndicatorCalculator
@@ -20,8 +23,11 @@ class NightlyPipeline:
 
     PIPELINE_INTERVALS = ['1d', '1wk', '1mo']
 
+    # Lookback must be long enough for recursive indicators (EMA/DEMA/TEMA/KAMA) to
+    # converge past TA-Lib's unstable period. EMA250 needs ~1000+ daily points;
+    # 365 left it cold-started (stuck ≈ its SMA seed).
     LOOKBACK_DAYS = {
-        '1d': 365,
+        '1d': 1100,
         '1wk': 500,
         '1mo': 1200,
     }
@@ -38,24 +44,65 @@ class NightlyPipeline:
         self.metadata_repo = stock_metadata_repo
         self.calculator = IndicatorCalculator()
 
-    # ── Main entry point ────────────────────────────────────
+    # ── Shared helpers ─────────────────────────────────────
 
-    async def run_nightly_update(self, intervals: List[str] = None) -> Dict[str, Any]:
+    async def _get_symbols(self) -> List[str]:
+        stocks = await self.stock_list_repo.get_all_stocks()
+        return [s.symbol for s in stocks]
+
+    async def _finalize_run(self, run_log: Dict, start: float):
+        run_log['completed_at'] = datetime.now(_ET)
+        run_log['duration_seconds'] = round(time.time() - start, 1)
+
+        await self._track_symbol_health(run_log)
+
+        if self.mongo_db is not None:
+            try:
+                await self.mongo_db['pipeline_runs'].insert_one(run_log)
+            except Exception as e:
+                print(f"Failed to log pipeline run: {e}")
+
+        self._print_health_report(run_log)
+
+        try:
+            from postgres_database import postgres_db
+            await postgres_db.reset_pool()
+        except Exception as e:
+            print(f"Failed to reset PG pool after pipeline: {e}")
+
+    async def _track_symbol_health(self, run_log: Dict):
+        try:
+            failed_symbols = {
+                e['symbol'] for e in run_log.get('failed_symbols', [])
+            }
+            all_symbols = set(await self._get_symbols())
+            succeeded = all_symbols - failed_symbols
+
+            await self.stock_list_repo.record_failures(list(failed_symbols))
+            await self.stock_list_repo.reset_failures(list(succeeded))
+
+            pruned = await self.stock_list_repo.prune_dead_symbols(max_failures=5)
+            if pruned:
+                print(f"[Pruning] Deactivated {pruned} symbols after 5+ consecutive failures")
+                run_log['pruned_symbols'] = pruned
+        except Exception as e:
+            print(f"[Pruning] Failed (non-fatal): {e}")
+
+    # ── Phase 1: K-line + indicators (5 PM ET) ─────────────
+
+    async def run_phase1_kline(self, intervals: List[str] = None) -> Dict[str, Any]:
         if intervals is None:
             intervals = self.PIPELINE_INTERVALS
 
         start = time.time()
         new_count = await self._discover_new_stocks()
-
-        stocks = await self.stock_list_repo.get_all_stocks()
-        symbols = [s.symbol for s in stocks]
-        total = len(symbols)
+        symbols = await self._get_symbols()
 
         run_log = {
-            'run_type': 'nightly',
-            'run_date': datetime.utcnow().isoformat(),
-            'started_at': datetime.utcnow(),
-            'total_symbols': total,
+            'run_type': 'phase1_kline',
+            'run_date': datetime.now(_ET).isoformat(),
+            'started_at': datetime.now(_ET),
+            'total_symbols': len(symbols),
             'new_stocks_added': new_count,
             'intervals': intervals,
             'success': 0,
@@ -94,7 +141,85 @@ class NightlyPipeline:
                 run_log['per_interval'][interval] = interval_stats
                 print(f"  [{interval}] done in {interval_stats['duration']}s")
 
-            # ── Fundamental data incremental update ────────
+            # Refresh the latest-per-symbol snapshot used by the AI screener / market
+            # tools (so they don't scan the full hypertable at request time).
+            await self._refresh_latest_snapshot(run_log)
+
+            run_log['status'] = 'completed'
+
+        except Exception as e:
+            run_log['status'] = 'failed'
+            run_log['error'] = str(e)
+            print(f"Phase 1 pipeline error: {e}")
+            import traceback
+            traceback.print_exc()
+
+        await self._finalize_run(run_log, start)
+        return run_log
+
+    async def _refresh_latest_snapshot(self, run_log: Dict = None):
+        """Rebuild latest_1d (one row per symbol: latest daily bar + prev_close)."""
+        try:
+            t0 = time.time()
+            async with self.pg_repo.db.pool.acquire() as conn:
+                # Build into a staging temp table first (the heavy ~80s part runs WITHOUT
+                # locking latest_1d). Narrow GROUP BY for the latest date per symbol, PK
+                # join for the full row, LATERAL index probe for prev_close.
+                await conn.execute("DROP TABLE IF EXISTS _latest_staging")
+                await conn.execute("""
+                    CREATE TEMP TABLE _latest_staging AS
+                    SELECT t.*, pr.close AS prev_close,
+                           vol.avg_vol AS avg_vol_20, vol.std_vol AS std_vol_20
+                    FROM interval_1d_technical t
+                    JOIN (
+                        SELECT symbol, max(datetime_index) AS dt
+                        FROM interval_1d_technical
+                        WHERE close IS NOT NULL
+                        GROUP BY symbol
+                    ) m ON t.symbol = m.symbol AND t.datetime_index = m.dt
+                    LEFT JOIN LATERAL (
+                        SELECT close FROM interval_1d_technical t2
+                        WHERE t2.symbol = t.symbol AND t2.datetime_index < t.datetime_index
+                        ORDER BY t2.datetime_index DESC LIMIT 1
+                    ) pr ON true
+                    LEFT JOIN LATERAL (
+                        SELECT AVG(volume) AS avg_vol, STDDEV(volume) AS std_vol
+                        FROM (
+                            SELECT volume FROM interval_1d_technical t3
+                            WHERE t3.symbol = t.symbol AND t3.datetime_index < t.datetime_index
+                              AND volume IS NOT NULL AND volume > 0
+                            ORDER BY t3.datetime_index DESC LIMIT 20
+                        ) x
+                    ) vol ON true
+                """)
+                # Quick swap — latest_1d is locked only for this fast TRUNCATE+INSERT.
+                async with conn.transaction():
+                    await conn.execute("TRUNCATE latest_1d")
+                    await conn.execute("INSERT INTO latest_1d SELECT * FROM _latest_staging")
+                count = await conn.fetchval("SELECT count(*) FROM latest_1d")
+                await conn.execute("DROP TABLE IF EXISTS _latest_staging")
+            print(f"[Snapshot] latest_1d refreshed: {count} symbols in {time.time() - t0:.1f}s")
+            if run_log is not None:
+                run_log['latest_1d_refreshed'] = count
+        except Exception as e:
+            print(f"[Snapshot] latest_1d refresh failed (non-fatal): {e}")
+
+    # ── Phase 2: Fundamentals + News (1 AM ET) ─────────────
+
+    async def run_phase2_fundamentals(self) -> Dict[str, Any]:
+        start = time.time()
+        symbols = await self._get_symbols()
+
+        run_log = {
+            'run_type': 'phase2_fundamentals',
+            'run_date': datetime.now(_ET).isoformat(),
+            'started_at': datetime.now(_ET),
+            'total_symbols': len(symbols),
+            'duration_seconds': 0,
+            'status': 'running',
+        }
+
+        try:
             if self.metadata_repo:
                 print(f"\n  [fundamentals] Checking for stale/missing data...")
                 fund_start = time.time()
@@ -106,8 +231,6 @@ class NightlyPipeline:
                       f"{fund_stats['up_to_date']} up-to-date, "
                       f"{fund_stats['failed']} failed")
 
-            # ── News sentiment update ─────────────────────
-            if self.metadata_repo:
                 print(f"\n  [news] Refreshing news sentiment...")
                 news_start = time.time()
                 news_stats = await self._update_news_sentiment(symbols)
@@ -123,21 +246,19 @@ class NightlyPipeline:
         except Exception as e:
             run_log['status'] = 'failed'
             run_log['error'] = str(e)
-            print(f"Pipeline error: {e}")
+            print(f"Phase 2 pipeline error: {e}")
             import traceback
             traceback.print_exc()
 
-        run_log['completed_at'] = datetime.utcnow()
-        run_log['duration_seconds'] = round(time.time() - start, 1)
-
-        if self.mongo_db is not None:
-            try:
-                await self.mongo_db['pipeline_runs'].insert_one(run_log)
-            except Exception as e:
-                print(f"Failed to log pipeline run: {e}")
-
-        self._print_health_report(run_log)
+        await self._finalize_run(run_log, start)
         return run_log
+
+    # ── Legacy: run both phases sequentially ───────────────
+
+    async def run_nightly_update(self, intervals: List[str] = None) -> Dict[str, Any]:
+        log1 = await self.run_phase1_kline(intervals)
+        log2 = await self.run_phase2_fundamentals()
+        return {**log1, **log2, 'run_type': 'nightly_full'}
 
     # ── New stock discovery ─────────────────────────────────
 
@@ -151,19 +272,33 @@ class NightlyPipeline:
                 print("[Discovery] StockListManager returned empty, skipping")
                 return 0
 
-            existing = await self.stock_list_repo.get_all_stocks()
-            existing_symbols = {s.symbol for s in existing}
+            existing = await self.stock_list_repo.get_all_stocks(active_only=False)
+            existing_map = {s.symbol: s for s in existing}
+            exchange_symbols = set()
 
             new_stocks = []
             for _, row in stocks_df.iterrows():
                 sym = row['Symbol']
-                if sym not in existing_symbols:
+                exchange_symbols.add(sym)
+                if sym not in existing_map:
                     new_stocks.append({
                         'symbol': sym,
                         'name': row.get('Name', sym),
                         'exchange': row.get('Exchange', 'UNKNOWN'),
                         'market_cap': row.get('Market_Cap'),
                     })
+
+            reactivated = []
+            for sym, stock in existing_map.items():
+                if not stock.active and sym in exchange_symbols:
+                    reactivated.append(sym)
+            if reactivated:
+                await self.stock_list_repo.collection.update_many(
+                    {'symbol': {'$in': reactivated}},
+                    {'$set': {'active': True, 'consecutive_failures': 0}}
+                )
+                print(f"[Discovery] Reactivated {len(reactivated)} symbols: "
+                      f"{reactivated[:10]}")
 
             if new_stocks:
                 added = await self.stock_list_repo.upsert_stocks(new_stocks)
@@ -228,7 +363,7 @@ class NightlyPipeline:
         lookback = timedelta(days=self.LOOKBACK_DAYS.get(interval, 365))
         start_date = (pd.Timestamp(earliest_latest) - lookback).strftime('%Y-%m-%d')
 
-        today = pd.Timestamp(datetime.utcnow().date())
+        today = pd.Timestamp(datetime.now(_ET).date())
         all_up_to_date = all(
             pd.Timestamp(latest_dates[s]).date() >= today.date()
             for s in symbols if s in latest_dates
@@ -320,7 +455,7 @@ class NightlyPipeline:
                     if existing:
                         cached = existing.get('news_sentiment')
                         if cached and cached.get('fetched_at'):
-                            age = (datetime.utcnow() - cached['fetched_at']).total_seconds()
+                            age = (datetime.now(_ET) - cached['fetched_at']).total_seconds()
                             if age < 86400:
                                 async with lock:
                                     stats['skipped'] += 1
@@ -329,7 +464,7 @@ class NightlyPipeline:
                     result = await self.dsm.fetch_news_sentiment(sym)
                     if result.success and result.data:
                         news = result.data
-                        news['fetched_at'] = datetime.utcnow()
+                        news['fetched_at'] = datetime.now(_ET)
                         metadata = existing or {'ticker': sym}
                         metadata['news_sentiment'] = news
                         await self.metadata_repo.create_or_update_stock_metadata(sym, metadata)
@@ -364,7 +499,7 @@ class NightlyPipeline:
                 last_date = last_date_val
             else:
                 return True
-            return (datetime.utcnow() - last_date).days > self.FUNDAMENTAL_STALE_DAYS
+            return (datetime.now(_ET) - last_date).days > self.FUNDAMENTAL_STALE_DAYS
         except Exception:
             return True
 
@@ -423,6 +558,8 @@ class NightlyPipeline:
               f"Dead letter: {run_log['dead_letter']}")
         print(f"  Retried: {run_log['retried_with_fallback']}  "
               f"Retry success: {run_log['retry_success']}")
+        if run_log.get('pruned_symbols'):
+            print(f"  Pruned (deactivated): {run_log['pruned_symbols']}")
 
         failed = run_log.get('failed_symbols', [])
         if failed:

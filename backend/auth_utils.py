@@ -65,6 +65,16 @@ def generate_verification_token() -> str:
     return secrets.token_urlsafe(48)  # 48 bytes = 64 characters in urlsafe base64
 
 
+# Referral codes: short, shareable, case-insensitive-friendly. Excludes ambiguous
+# characters (0/O, 1/I/L) so they're easy to read and type from a shared link.
+_REFERRAL_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+
+def generate_referral_code(length: int = 8) -> str:
+    """Generate a random referral code (uniqueness is enforced by the caller/DB)."""
+    return "".join(secrets.choice(_REFERRAL_ALPHABET) for _ in range(length))
+
+
 def validate_password_strength(password: str) -> Tuple[bool, Optional[str]]:
     """
     Validate password strength

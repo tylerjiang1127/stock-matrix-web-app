@@ -136,7 +136,7 @@ function DailyIntelligence() {
                 credentials: 'include',
                 body: JSON.stringify({}),
             });
-            setGenProgress('AI is analyzing 500+ stocks and writing report...');
+            setGenProgress('AI is analyzing 6800+ stocks and writing report...');
             setTimeout(() => {
                 setGenProgress('Finalizing report...');
             }, 15000);

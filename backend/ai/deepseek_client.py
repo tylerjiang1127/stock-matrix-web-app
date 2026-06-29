@@ -1,9 +1,12 @@
 import json
 import asyncio
 import logging
+import re
 from typing import Dict, List, Any, Optional, AsyncGenerator, Callable
 
 import httpx
+
+_DSML_RE = re.compile(r'<[\s|｜]*(?:DSML|/?tool_calls|/?invoke|/?parameter).*', re.DOTALL)
 
 logger = logging.getLogger(__name__)
 
@@ -172,53 +175,100 @@ class DeepseekClient:
         tool_registry: Dict[str, Callable],
         max_rounds: int = 5,
     ) -> AsyncGenerator[Dict, None]:
-        """Like execute_tool_loop but yields SSE-style events for streaming."""
+        """Stream SSE-style events. Each round is streamed token-by-token so the answer
+        appears progressively; `text` events carry the CUMULATIVE content so the frontend
+        can keep rendering it as Markdown (formatting is preserved)."""
         conversation = list(messages)
 
         for round_num in range(max_rounds):
-            response = await self.chat_completion(
-                messages=conversation, tools=tools, temperature=0.3,
-            )
-            choice = response["choices"][0]
-            message = choice["message"]
-            conversation.append(message)
+            content, tool_calls = "", {}
 
-            if not message.get("tool_calls"):
-                content = message.get("content", "")
-                yield {"type": "text", "content": content}
+            # Stream this round; emit text as it arrives, accumulate tool-call deltas.
+            stream = await self.chat_completion(
+                messages=conversation, tools=tools, temperature=0.3, stream=True,
+            )
+            last_yielded = ""
+            async for chunk in stream:
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                if delta.get("content"):
+                    content += delta["content"]
+                    clean = _DSML_RE.sub("", content).rstrip()
+                    if clean and clean != last_yielded:
+                        last_yielded = clean
+                        yield {"type": "text", "content": clean}
+                for tc in delta.get("tool_calls") or []:
+                    idx = tc.get("index", 0)
+                    slot = tool_calls.setdefault(
+                        idx, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                    )
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["function"]["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        slot["function"]["arguments"] += fn["arguments"]
+
+            ordered_calls = [tool_calls[k] for k in sorted(tool_calls)]
+            assistant_msg = {"role": "assistant", "content": content or None}
+            if ordered_calls:
+                assistant_msg["tool_calls"] = ordered_calls
+            conversation.append(assistant_msg)
+
+            # No tool calls → this round was the final answer (already streamed).
+            if not ordered_calls:
                 yield {"type": "done"}
                 return
 
-            for tool_call in message["tool_calls"]:
-                fn_name = tool_call["function"]["name"]
+            # Execute all tool calls in parallel, then append results in order.
+            parsed_calls = []
+            for tc in ordered_calls:
+                fn_name = tc["function"]["name"]
                 try:
-                    fn_args = json.loads(tool_call["function"]["arguments"])
+                    fn_args = json.loads(tc["function"]["arguments"])
                 except json.JSONDecodeError:
                     fn_args = {}
-
+                parsed_calls.append((tc, fn_name, fn_args))
                 yield {"type": "tool_call", "name": fn_name, "arguments": fn_args}
 
-                handler = tool_registry.get(fn_name)
+            async def _run_tool(name, args):
+                handler = tool_registry.get(name)
                 if handler is None:
-                    result_data = {"error": f"Unknown tool: {fn_name}"}
-                else:
-                    try:
-                        result_data = await handler(**fn_args)
-                    except Exception as e:
-                        result_data = {"error": str(e)}
+                    return {"error": f"Unknown tool: {name}"}
+                try:
+                    return await handler(**args)
+                except Exception as e:
+                    return {"error": str(e)}
 
-                result_str = json.dumps(result_data, default=str)
+            results = await asyncio.gather(
+                *[_run_tool(fn_name, fn_args) for _, fn_name, fn_args in parsed_calls]
+            )
+
+            for (tc, fn_name, _), result_data in zip(parsed_calls, results):
                 yield {"type": "tool_result", "name": fn_name, "data": result_data}
-
                 conversation.append({
                     "role": "tool",
-                    "tool_call_id": tool_call["id"],
-                    "content": result_str,
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(result_data, default=str),
                 })
 
-        final = await self.chat_completion(messages=conversation, temperature=0.3)
-        content = final["choices"][0]["message"].get("content", "")
-        yield {"type": "text", "content": content}
+        # Max rounds reached — stream one final answer.
+        content, last_yielded = "", ""
+        stream = await self.chat_completion(messages=conversation, temperature=0.3, stream=True)
+        async for chunk in stream:
+            choices = chunk.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
+            if delta.get("content"):
+                content += delta["content"]
+                clean = _DSML_RE.sub("", content).rstrip()
+                if clean and clean != last_yielded:
+                    last_yielded = clean
+                    yield {"type": "text", "content": clean}
         yield {"type": "done"}
 
     # ── Usage tracking ─────────────────────────────────────

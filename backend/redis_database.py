@@ -7,6 +7,9 @@ import json
 from typing import Optional, Any, Dict
 import os
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -210,7 +213,7 @@ class SessionManager:
             'user_id': user_id,
             'username': user_data.get('username'),
             'email': user_data.get('email'),
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.now(_ET).isoformat()
         }
         
         await self.redis.set(key, session_data, expire=self.session_expire)

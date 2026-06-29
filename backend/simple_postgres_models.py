@@ -52,23 +52,18 @@ class SimpleTechnicalDataRepository:
 
     async def get_top_movers(self, limit: int = 10) -> Dict[str, list]:
         """Return top gainers and losers by daily % change."""
+        # latest_1d: per-symbol snapshot (close + prev_close) refreshed daily by the
+        # pipeline — avoids a ROW_NUMBER scan of the 26M-row hypertable.
         query = """
-            WITH latest_two AS (
-                SELECT symbol, close, datetime_index,
-                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
-                FROM interval_1d_technical
-                WHERE close IS NOT NULL
-            )
             SELECT
-                a.symbol,
-                a.close as latest_close,
-                b.close as prev_close,
-                CASE WHEN b.close > 0
-                     THEN ROUND(((a.close - b.close) / b.close * 100)::numeric, 2)
+                symbol,
+                close as latest_close,
+                prev_close,
+                CASE WHEN prev_close > 0
+                     THEN ROUND(((close - prev_close) / prev_close * 100)::numeric, 2)
                      ELSE 0 END as change_pct
-            FROM latest_two a
-            JOIN latest_two b ON a.symbol = b.symbol AND b.rn = 2
-            WHERE a.rn = 1 AND b.close > 0
+            FROM latest_1d
+            WHERE prev_close IS NOT NULL AND prev_close > 0
             ORDER BY change_pct DESC
         """
         async with self.db.pool.acquire() as conn:
@@ -81,25 +76,16 @@ class SimpleTechnicalDataRepository:
 
     async def get_volume_anomalies(self, threshold: float = 2.0, limit: int = 20) -> list:
         """Return symbols where latest volume exceeds 20-day average by threshold std devs."""
+        # 20-day volume avg/stddev are precomputed per symbol in latest_1d by the daily
+        # pipeline — avoids a full-hypertable window scan.
         query = """
-            WITH vol_stats AS (
-                SELECT symbol,
-                       volume,
-                       datetime_index,
-                       AVG(volume) OVER (PARTITION BY symbol ORDER BY datetime_index
-                                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) as avg_vol,
-                       STDDEV(volume) OVER (PARTITION BY symbol ORDER BY datetime_index
-                                            ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING) as std_vol,
-                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
-                FROM interval_1d_technical
-                WHERE volume IS NOT NULL AND volume > 0
-            )
-            SELECT symbol, volume, avg_vol, std_vol,
-                   ROUND(((volume - avg_vol) / NULLIF(std_vol, 0))::numeric, 2) as volume_zscore
-            FROM vol_stats
-            WHERE rn = 1
-              AND std_vol > 0
-              AND (volume - avg_vol) / std_vol >= $1
+            SELECT symbol, volume,
+                   avg_vol_20 as avg_vol, std_vol_20 as std_vol,
+                   ROUND(((volume - avg_vol_20) / NULLIF(std_vol_20, 0))::numeric, 2) as volume_zscore
+            FROM latest_1d
+            WHERE volume IS NOT NULL
+              AND std_vol_20 > 0
+              AND (volume - avg_vol_20) / std_vol_20 >= $1
             ORDER BY volume_zscore DESC
             LIMIT $2
         """
@@ -109,31 +95,20 @@ class SimpleTechnicalDataRepository:
 
     async def get_market_breadth(self) -> Dict[str, Any]:
         """Return advance/decline counts and % of stocks above key SMAs."""
+        # latest_1d: per-symbol snapshot refreshed daily by the pipeline — avoids two
+        # ROW_NUMBER scans + join over the 26M-row hypertable.
         query = """
-            WITH latest AS (
-                SELECT symbol, close, sma60, sma250,
-                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
-                FROM interval_1d_technical
-                WHERE close IS NOT NULL
-            ),
-            prev AS (
-                SELECT symbol, close as prev_close,
-                       ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY datetime_index DESC) as rn
-                FROM interval_1d_technical
-                WHERE close IS NOT NULL
-            )
             SELECT
-                COUNT(*) FILTER (WHERE l.close > p.prev_close) as advancing,
-                COUNT(*) FILTER (WHERE l.close < p.prev_close) as declining,
-                COUNT(*) FILTER (WHERE l.close = p.prev_close) as unchanged,
+                COUNT(*) FILTER (WHERE close > prev_close) as advancing,
+                COUNT(*) FILTER (WHERE close < prev_close) as declining,
+                COUNT(*) FILTER (WHERE close = prev_close) as unchanged,
                 COUNT(*) as total,
-                COUNT(*) FILTER (WHERE l.close > l.sma60 AND l.sma60 IS NOT NULL) as above_sma50,
-                COUNT(*) FILTER (WHERE l.sma60 IS NOT NULL) as total_with_sma50,
-                COUNT(*) FILTER (WHERE l.close > l.sma250 AND l.sma250 IS NOT NULL) as above_sma200,
-                COUNT(*) FILTER (WHERE l.sma250 IS NOT NULL) as total_with_sma200
-            FROM latest l
-            JOIN prev p ON l.symbol = p.symbol AND p.rn = 2
-            WHERE l.rn = 1
+                COUNT(*) FILTER (WHERE close > sma60 AND sma60 IS NOT NULL) as above_sma50,
+                COUNT(*) FILTER (WHERE sma60 IS NOT NULL) as total_with_sma50,
+                COUNT(*) FILTER (WHERE close > sma250 AND sma250 IS NOT NULL) as above_sma200,
+                COUNT(*) FILTER (WHERE sma250 IS NOT NULL) as total_with_sma200
+            FROM latest_1d
+            WHERE prev_close IS NOT NULL
         """
         async with self.db.pool.acquire() as conn:
             row = await conn.fetchrow(query)

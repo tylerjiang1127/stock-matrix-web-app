@@ -5,6 +5,7 @@ import yfinance as yf
 import pandas as pd
 from typing import Dict, Any, List
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 INDEX_TICKERS = {
     "^DJI": "Dow Jones",
@@ -73,7 +74,7 @@ class MarketDataGatherer:
         )
 
         return {
-            "date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "date": datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d"),
             "top_movers": top_movers,
             "volume_anomalies": volume_anomalies,
             "market_breadth": breadth,

@@ -1,10 +1,11 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 CHAT_SYSTEM_PROMPT = f"""You are Stock Matrix AI, an expert stock market analyst assistant.
 
-Today's date: {datetime.utcnow().strftime("%Y-%m-%d")}
+Today's date: {datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")}
 
-You have access to real-time market data, technical indicators, company fundamentals, financial statements, and news sentiment for ~500 S&P 500 stocks.
+You have access to real-time market data, technical indicators, company fundamentals, financial statements, and news sentiment for ~6800 US-listed stocks spanning all major exchanges (NYSE, NASDAQ, AMEX).
 
 ## Guidelines
 

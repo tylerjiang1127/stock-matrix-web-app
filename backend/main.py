@@ -1,10 +1,13 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Cookie, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 import json
 import asyncio
 import os
@@ -13,13 +16,17 @@ from database_init import db_initializer
 from stock_metadata_fetcher import StockMetaDataFetcher
 from postgres_data_retrieval import stock_data_retriever
 from redis_database import cache_manager, redis_db
-from auth_routes import auth_router
+from postgres_database import postgres_db
+import uuid
+from auth_routes import auth_router, get_current_user
+from entitlements import monitor_max, get_entitlements
 from data_sources import (
     AlphaVantageAdapter, YFinanceAdapter, FinnhubAdapter,
     DataValidator, HealthMonitor, DataSourceManager,
 )
 from data_sources.nightly_pipeline import NightlyPipeline
 from data_sources.realtime_service import RealtimeService
+from data_sources.live_quotes_service import LiveQuotesService
 from data_sources.data_initializer import DataInitializer
 from ai.ai_router import ai_router
 
@@ -41,6 +48,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Public base URL of the frontend (used to build shareable referral links)
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:3000")
 
 def format_timestamp_for_interval(timestamp, interval):
     """format timestamp based on interval"""
@@ -105,7 +115,23 @@ async def startup_data_sources():
     from database import db as db_conn
     pg_repo = SimpleTechnicalDataRepository(postgres_db)
     app.state.pg_repo = pg_repo
+
+    from credits_service import CreditsService
+    app.state.credits_service = CreditsService(postgres_db)
+
+    from anon_usage import AnonUsageService
+    app.state.anon_usage = AnonUsageService(postgres_db, redis_db)
+
+    from referral_service import ReferralService
+    app.state.referral_service = ReferralService(postgres_db, app.state.credits_service)
+
+    from tier_service import TierService
+    app.state.tier_service = TierService(postgres_db, app.state.credits_service)
     mongo_db = db_conn.mongodb_db if hasattr(db_conn, 'mongodb_db') else None
+
+    from activity_service import ActivityService
+    app.state.activity_service = ActivityService(mongo_db)
+    await app.state.activity_service.ensure_indexes()
 
     metadata_repo = db_initializer.stock_metadata_repo \
         if hasattr(db_initializer, 'stock_metadata_repo') else None
@@ -206,18 +232,29 @@ async def startup_data_sources():
     app.state.realtime_service.start()
     print("Real-time stock data service started (polls during market hours)")
 
+    # ── Live quotes service ───────────────────────────
+    app.state.live_quotes_service = LiveQuotesService()
+    print("Live quotes service initialized")
+
     # ── Scheduler ──────────────────────────────────────
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
         scheduler = AsyncIOScheduler()
         scheduler.add_job(
-            app.state.nightly_pipeline.run_nightly_update,
+            app.state.nightly_pipeline.run_phase1_kline,
             CronTrigger(hour=17, minute=0, timezone='US/Eastern', day_of_week='mon-fri'),
-            id='nightly_pipeline',
+            id='pipeline_phase1_kline',
             replace_existing=True,
         )
-        print("Nightly pipeline scheduled at 5:00 PM ET (Mon-Fri)")
+        scheduler.add_job(
+            app.state.nightly_pipeline.run_phase2_fundamentals,
+            CronTrigger(hour=1, minute=0, timezone='US/Eastern'),
+            id='pipeline_phase2_fundamentals',
+            replace_existing=True,
+        )
+        print("Pipeline Phase 1 (K-line) scheduled at 5:00 PM ET (Mon-Fri)")
+        print("Pipeline Phase 2 (Fundamentals+News) scheduled at 1:00 AM ET (Daily)")
 
         if getattr(app.state, "report_generator", None):
             scheduler.add_job(
@@ -673,6 +710,67 @@ async def get_stock_chart(symbol: str, request: DatabaseStockRequest):
         raise HTTPException(status_code=500, detail=f"Error fetching chart data: {str(e)}")
 
 
+@app.post("/api/stocks/{symbol}/market-close-refresh")
+async def refresh_market_close(symbol: str, request: DatabaseStockRequest):
+    """Fetch today's close from yfinance, compute indicators, save to PG, return chart data."""
+    try:
+        import yfinance as yf
+        from data_sources.indicator_calculator import IndicatorCalculator
+
+        await db_initializer.initialize_repositories()
+
+        yf_symbol = symbol.replace(".", "-")
+        df = yf.Ticker(yf_symbol).history(period="1y", interval="1d")
+        if df is None or df.empty:
+            raise HTTPException(status_code=404, detail=f"No yfinance data for {symbol}")
+
+        # Strip timezone so save_technical_data can tz_localize to UTC
+        df.index = df.index.tz_localize(None)
+
+        calc = IndicatorCalculator()
+        indicators = calc.compute_all_indicators(df, "1d")
+
+        # Save only today's row so we don't overwrite pipeline data
+        today_indicators = dict(indicators)
+        today_indicators["stock_price"] = df.iloc[[-1]]
+        await app.state.pg_repo.save_technical_data(symbol, "1d", today_indicators)
+
+        # Return full chart from PG (now includes today)
+        technical_data = await stock_data_retriever.get_stock_technical_data(
+            symbol, request.interval, days=request.days
+        )
+        if not technical_data:
+            raise HTTPException(status_code=404, detail=f"No data found for {symbol}")
+
+        last = df.iloc[-1]
+        prev_close = float(df.iloc[-2]["Close"]) if len(df) >= 2 else None
+        close = float(last["Close"])
+
+        return {
+            "candlestick_data": technical_data.get("candlestick_data", []),
+            "volume_data": technical_data.get("volume_data", []),
+            "ma_data": technical_data.get("ma_data", {}),
+            "technical_data": technical_data.get("technical_data", {}),
+            "close_price": {
+                "price": round(close, 4),
+                "prev_close": prev_close,
+                "change": round(close - prev_close, 4) if prev_close else None,
+                "change_pct": round((close - prev_close) / prev_close * 100, 2) if prev_close and prev_close > 0 else None,
+            },
+            "chart_config": {
+                "ticker": symbol,
+                "interval": request.interval,
+                "ma_options": request.ma_options,
+                "tech_ind": request.tech_ind,
+                "time_ranges": DataTransformer.get_time_ranges(request.interval),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error refreshing market close data: {str(e)}")
+
+
 @app.get("/api/stocks/{symbol}/info")
 async def get_stock_info(symbol: str):
     """Company overview + news + fundamentals — cached in MongoDB, parallel fetch"""
@@ -697,13 +795,16 @@ async def get_stock_info(symbol: str):
         async def get_news():
             cached = existing_metadata.get('news_sentiment')
             if cached and cached.get('fetched_at'):
-                age = (datetime.utcnow() - cached['fetched_at']).total_seconds()
+                fetched_at = cached['fetched_at']
+                if isinstance(fetched_at, datetime) and fetched_at.tzinfo is None:
+                    fetched_at = fetched_at.replace(tzinfo=_ET)
+                age = (datetime.now(_ET) - fetched_at).total_seconds()
                 if age < 86400:
                     return cached
             result = await dsm.fetch_news_sentiment(symbol)
             if result.success and result.data:
                 news = result.data
-                news['fetched_at'] = datetime.utcnow()
+                news['fetched_at'] = datetime.now(_ET)
                 existing_metadata['news_sentiment'] = news
                 return news
             return cached or {
@@ -728,7 +829,7 @@ async def get_stock_info(symbol: str):
                         else:
                             need_fetch = True
                             last_date = None
-                        if last_date and (datetime.now() - last_date).days > 100:
+                        if last_date and (datetime.now(_ET) - last_date.replace(tzinfo=None)).days > 100:
                             need_fetch = True
                     else:
                         need_fetch = True
@@ -817,15 +918,307 @@ async def get_source_health():
 @app.websocket("/ws/realtime")
 async def realtime_websocket(ws: WebSocket):
     svc: RealtimeService = app.state.realtime_service
+    lqs: LiveQuotesService = app.state.live_quotes_service
     await svc.connect(ws)
+    subscribed_symbols: set = set()
     try:
         while True:
             data = await ws.receive_json()
+            action = data.get("action")
+            symbol = (data.get("symbol") or "").upper()
+
+            if action == "subscribe" and symbol:
+                subscribed_symbols.add(symbol)
+                result = await lqs.subscribe(symbol)
+                if result:
+                    await ws.send_json({"type": "live_quote", "symbol": symbol, **result})
+
+            elif action == "unsubscribe" and symbol:
+                subscribed_symbols.discard(symbol)
+                await lqs.unsubscribe(symbol)
+
             await svc.handle_message(ws, data)
     except WebSocketDisconnect:
-        svc.disconnect(ws)
+        pass
     except Exception:
+        pass
+    finally:
         svc.disconnect(ws)
+        for sym in subscribed_symbols:
+            await lqs.unsubscribe(sym)
+
+
+@app.get("/api/live-quotes/{symbol}")
+async def get_live_quote(symbol: str):
+    """Query the live_quotes table for a symbol's cached data."""
+    lqs: LiveQuotesService = app.state.live_quotes_service
+    data = await lqs.get_quote(symbol.upper())
+    if not data:
+        return {"found": False, "symbol": symbol.upper()}
+    return {"found": True, **data}
+
+
+@app.post("/api/live-quotes/{symbol}/subscribe")
+async def subscribe_live_quote(symbol: str):
+    """Trigger a fetch if needed and start polling. Returns current data."""
+    lqs: LiveQuotesService = app.state.live_quotes_service
+    data = await lqs.subscribe(symbol.upper())
+    return {"found": bool(data), **(data or {})}
+
+
+@app.post("/api/live-quotes/{symbol}/unsubscribe")
+async def unsubscribe_live_quote(symbol: str):
+    """Decrement viewer count for a symbol."""
+    lqs: LiveQuotesService = app.state.live_quotes_service
+    await lqs.unsubscribe(symbol.upper())
+    return {"status": "ok"}
+
+
+# ── Monitor List Endpoints ────────────────────────────────
+
+class MonitorListSyncRequest(BaseModel):
+    symbols: List[str]
+
+@app.get("/api/monitor-list")
+async def get_monitor_list(session_id: Optional[str] = Cookie(None)):
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = uuid.UUID(user["user_id"])
+    async with postgres_db.pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT symbol FROM user_monitor_list WHERE user_id = $1 ORDER BY added_at", uid
+        )
+    return {"symbols": [r["symbol"] for r in rows]}
+
+# NOTE: this static route MUST be declared before "/api/monitor-list/{symbol}",
+# otherwise FastAPI matches "sync" as a {symbol} and the add endpoint runs instead.
+@app.post("/api/monitor-list/sync")
+async def sync_monitor_list(body: MonitorListSyncRequest, session_id: Optional[str] = Cookie(None)):
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = uuid.UUID(user["user_id"])
+    async with postgres_db.pool.acquire() as conn:
+        tier = await conn.fetchval("SELECT tier FROM user_id_security WHERE id = $1", uid)
+        max_stocks = monitor_max(tier)
+        for sym in body.symbols[:max_stocks]:
+            count = await conn.fetchval(
+                "SELECT COUNT(*) FROM user_monitor_list WHERE user_id = $1", uid
+            )
+            if count >= max_stocks:
+                break
+            await conn.execute(
+                "INSERT INTO user_monitor_list (user_id, symbol) VALUES ($1, $2) ON CONFLICT (user_id, symbol) DO NOTHING",
+                uid, sym.upper()
+            )
+        rows = await conn.fetch(
+            "SELECT symbol FROM user_monitor_list WHERE user_id = $1 ORDER BY added_at", uid
+        )
+    return {"symbols": [r["symbol"] for r in rows]}
+
+@app.post("/api/monitor-list/{symbol}")
+async def add_to_monitor_list(symbol: str, session_id: Optional[str] = Cookie(None)):
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = uuid.UUID(user["user_id"])
+    async with postgres_db.pool.acquire() as conn:
+        tier = await conn.fetchval("SELECT tier FROM user_id_security WHERE id = $1", uid)
+        max_stocks = monitor_max(tier)
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM user_monitor_list WHERE user_id = $1", uid
+        )
+        if count >= max_stocks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Your {tier} plan allows up to {max_stocks} monitored stocks",
+            )
+        await conn.execute(
+            "INSERT INTO user_monitor_list (user_id, symbol) VALUES ($1, $2) ON CONFLICT (user_id, symbol) DO NOTHING",
+            uid, symbol.upper()
+        )
+    return {"status": "ok", "symbol": symbol.upper()}
+
+@app.delete("/api/monitor-list/{symbol}")
+async def remove_from_monitor_list(symbol: str, session_id: Optional[str] = Cookie(None)):
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = uuid.UUID(user["user_id"])
+    async with postgres_db.pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM user_monitor_list WHERE user_id = $1 AND symbol = $2",
+            uid, symbol.upper()
+        )
+    return {"status": "ok", "symbol": symbol.upper()}
+
+
+@app.get("/api/me/entitlements")
+async def get_my_entitlements(request: Request, session_id: Optional[str] = Cookie(None)):
+    """Effective tier limits + credit balances for the caller.
+
+    The frontend reads this so the UI never drifts from server-side rules. Returns
+    anonymous entitlements + per-IP AI usage (for the soft paywall) when not logged in.
+    """
+    user = await get_current_user(session_id)
+    if not user:
+        anon = getattr(app.state, "anon_usage", None)
+        anon_usage = None
+        if anon:
+            from ai.ai_router import _client_ip
+            anon_usage = await anon.get_status(_client_ip(request))
+        return {
+            "authenticated": False,
+            "tier": "anonymous",
+            "entitlements": get_entitlements("anonymous"),
+            "credits": None,
+            "anon_usage": anon_usage,
+        }
+    wallet = await app.state.credits_service.get_wallet(user["user_id"])
+    tier = wallet["tier"]
+    return {
+        "authenticated": True,
+        "tier": tier,
+        "entitlements": get_entitlements(tier),
+        "credits": {
+            "base": wallet["base_credits"],
+            "boost": wallet["boost_credits"],
+            "total": wallet["total"],
+            "monthly_allotment": wallet["monthly_allotment"],
+            "resets_on": wallet["resets_on"],
+        },
+    }
+
+
+@app.get("/api/referral")
+async def get_referral(session_id: Optional[str] = Cookie(None)):
+    """The caller's referral code, shareable link, and reward stats (for the profile card)."""
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    async with postgres_db.pool.acquire() as conn:
+        code = await conn.fetchval(
+            "SELECT referral_code FROM user_id_security WHERE id = $1", uuid.UUID(user["user_id"])
+        )
+    summary = await app.state.referral_service.get_summary(user["user_id"])
+    return {
+        "referral_code": code,
+        "referral_link": f"{FRONTEND_BASE_URL}/?ref={code}" if code else None,
+        **summary,
+    }
+
+
+@app.get("/api/me/profile")
+async def get_my_profile(session_id: Optional[str] = Cookie(None)):
+    """One-stop payload for the profile page: account, credits, referral, recent history."""
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uid = uuid.UUID(user["user_id"])
+    async with postgres_db.pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT username, email, is_email_verified, tier, referral_code,
+                   created_at, last_login_at, is_admin
+            FROM user_id_security WHERE id = $1
+            """,
+            uid,
+        )
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    wallet = await app.state.credits_service.get_wallet(user["user_id"])
+    summary = await app.state.referral_service.get_summary(user["user_id"])
+    history = await app.state.credits_service.history(user["user_id"], limit=15)
+    code = row["referral_code"]
+
+    return {
+        "user": {
+            "user_id": user["user_id"],
+            "username": row["username"],
+            "email": row["email"],
+            "is_email_verified": row["is_email_verified"],
+            "tier": row["tier"],
+            "is_admin": row["is_admin"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            "last_login_at": row["last_login_at"].isoformat() if row["last_login_at"] else None,
+        },
+        "credits": {
+            "base": wallet["base_credits"],
+            "boost": wallet["boost_credits"],
+            "total": wallet["total"],
+            "monthly_allotment": wallet["monthly_allotment"],
+            "resets_on": wallet["resets_on"],
+        },
+        "referral": {
+            "referral_code": code,
+            "referral_link": f"{FRONTEND_BASE_URL}/?ref={code}" if code else None,
+            **summary,
+        },
+        "history": history,
+    }
+
+
+@app.get("/api/me/activity")
+async def get_my_activity(limit: int = 50, session_id: Optional[str] = Cookie(None)):
+    """The caller's recent activity events (semantic actions: logins, screens, chats, ...)."""
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    events = await app.state.activity_service.recent(user["user_id"], limit=min(limit, 200))
+    return {"events": events}
+
+
+# ──────────────────────── Admin (tier toggle / credit grant) ────────────────────────
+
+class AdminTierRequest(BaseModel):
+    tier: str  # 'base' | 'premium'
+
+
+class AdminGrantRequest(BaseModel):
+    amount: int
+    bucket: str = "boost"
+
+
+async def require_admin(session_id: Optional[str]) -> dict:
+    user = await get_current_user(session_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    async with postgres_db.pool.acquire() as conn:
+        is_admin = await conn.fetchval(
+            "SELECT is_admin FROM user_id_security WHERE id = $1", uuid.UUID(user["user_id"])
+        )
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+@app.post("/api/admin/users/{user_id}/tier")
+async def admin_set_tier(user_id: str, body: AdminTierRequest, session_id: Optional[str] = Cookie(None)):
+    """Admin: switch a user's tier (applies the §2.6 credit + audit logic). Payment placeholder."""
+    await require_admin(session_id)
+    try:
+        return await app.state.tier_service.set_tier(user_id, body.tier, reason="admin")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except LookupError:
+        raise HTTPException(status_code=404, detail="User not found")
+
+
+@app.post("/api/admin/users/{user_id}/credits")
+async def admin_grant_credits(user_id: str, body: AdminGrantRequest, session_id: Optional[str] = Cookie(None)):
+    """Admin: grant credits to a user (testing / goodwill)."""
+    await require_admin(session_id)
+    return await app.state.credits_service.grant(
+        user_id, body.amount, action="admin_adjust", bucket=body.bucket
+    )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    lqs: LiveQuotesService = app.state.live_quotes_service
+    await lqs.stop_all()
 
 
 @app.get("/api/init/status")
@@ -855,7 +1248,19 @@ async def _run_init_background():
 async def trigger_nightly_pipeline(background_tasks: BackgroundTasks):
     pipeline = app.state.nightly_pipeline
     background_tasks.add_task(pipeline.run_nightly_update)
-    return {"status": "started", "message": "Nightly pipeline triggered in background"}
+    return {"status": "started", "message": "Full nightly pipeline (phase1+phase2) triggered in background"}
+
+@app.post("/api/pipeline/phase1")
+async def trigger_phase1(background_tasks: BackgroundTasks):
+    pipeline = app.state.nightly_pipeline
+    background_tasks.add_task(pipeline.run_phase1_kline)
+    return {"status": "started", "message": "Phase 1 (K-line + indicators) triggered in background"}
+
+@app.post("/api/pipeline/phase2")
+async def trigger_phase2(background_tasks: BackgroundTasks):
+    pipeline = app.state.nightly_pipeline
+    background_tasks.add_task(pipeline.run_phase2_fundamentals)
+    return {"status": "started", "message": "Phase 2 (Fundamentals + News) triggered in background"}
 
 
 @app.get("/api/pipeline/history")
