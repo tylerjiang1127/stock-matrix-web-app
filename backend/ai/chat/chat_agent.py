@@ -30,7 +30,14 @@ class ChatAgent:
 
         existing = await self.conversation_repo.get_conversation(conversation_id)
         if existing:
-            messages = existing["messages"]
+            # Filter out broken tool-call messages that may have been stored
+            # before _strip_for_storage was fixed. Sending role=tool or
+            # tool_call-only assistant messages with missing IDs causes 400.
+            messages = [
+                m for m in existing["messages"]
+                if m.get("role") != "tool"
+                and not (not m.get("content") and m.get("tool_calls"))
+            ]
         else:
             messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
 
@@ -54,21 +61,30 @@ class ChatAgent:
 
     @staticmethod
     def _strip_for_storage(messages: List[Dict]) -> List[Dict]:
-        """Keep only role/content for storage to limit document size."""
+        """Reduce messages to text-only role/content for storage.
+
+        Tool call intermediate messages (role=tool, and assistant messages
+        that only contain tool_calls with no text) are dropped entirely.
+        Replaying them across turns breaks Deepseek's tool_call_id pairing
+        because stored tool_call IDs get stripped, causing 400 errors on
+        the next request.
+        """
         stripped = []
         for m in messages:
-            entry = {"role": m["role"]}
-            if "content" in m and m["content"]:
-                content = m["content"]
-                if isinstance(content, str) and len(content) > 10000:
+            role = m["role"]
+            content = m.get("content") or ""
+
+            # Drop tool-result messages and tool-call-only assistant turns.
+            if role == "tool":
+                continue
+            if not content and m.get("tool_calls"):
+                continue
+
+            entry: Dict = {"role": role}
+            if isinstance(content, str):
+                if len(content) > 10000:
                     content = content[:10000] + "...(truncated)"
-                entry["content"] = content
-            if m.get("tool_calls"):
-                entry["tool_calls"] = [
-                    {"function": {"name": tc["function"]["name"]}}
-                    for tc in m["tool_calls"]
-                ]
-            if m.get("tool_call_id"):
-                entry["tool_call_id"] = m["tool_call_id"]
+                if content:
+                    entry["content"] = content
             stripped.append(entry)
         return stripped

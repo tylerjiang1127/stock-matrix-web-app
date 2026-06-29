@@ -140,19 +140,10 @@ class NLScreener:
     async def _execute_filter(
         self, where_clause: str, params: list, order_by: str, limit: int
     ) -> List[Dict]:
+        # latest_1d is a per-symbol snapshot refreshed daily by the pipeline — a
+        # millisecond lookup instead of a ~38s DISTINCT-ON scan of the 26M-row hypertable.
         query = f"""
-            WITH latest AS (
-                SELECT DISTINCT ON (symbol)
-                    symbol, datetime_index, open, high, low, close, volume,
-                    rsi, macd, macd_signal, macd_hist,
-                    bbands_upper, bbands_middle, bbands_lower,
-                    sma5, sma10, sma20, sma30, sma60, sma120, sma250,
-                    ema5, ema10, ema20, ema30, ema60, ema120, ema250
-                FROM interval_1d_technical
-                WHERE close IS NOT NULL
-                ORDER BY symbol, datetime_index DESC
-            )
-            SELECT * FROM latest
+            SELECT * FROM latest_1d
             WHERE {where_clause}
             ORDER BY {order_by}
             LIMIT {int(limit)}

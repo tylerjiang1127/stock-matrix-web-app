@@ -9,6 +9,9 @@ import asyncio
 import time
 import pandas as pd
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 from typing import Dict, List, Any, Optional
 
 from data_sources.indicator_calculator import IndicatorCalculator
@@ -55,7 +58,7 @@ class DataInitializer:
         run_log = {
             'run_type': 'initialization',
             'status': 'running',
-            'started_at': datetime.utcnow(),
+            'started_at': datetime.now(_ET),
             'completed_at': None,
             'duration_seconds': 0,
             'total_symbols': 0,
@@ -119,7 +122,7 @@ class DataInitializer:
             import traceback
             traceback.print_exc()
 
-        run_log['completed_at'] = datetime.utcnow()
+        run_log['completed_at'] = datetime.now(_ET)
         run_log['duration_seconds'] = round(time.time() - start, 1)
 
         if self.mongo_db is not None:

@@ -10,6 +10,7 @@ import Sidebar from './components/Navigation/Sidebar';
 import DailyIntelligence from './components/AI/DailyIntelligence';
 import ChatPanel from './components/AI/ChatPanel';
 import Screener from './components/AI/Screener';
+import ProfilePage from './components/Auth/ProfilePage';
 import './components/StockChart.css';
 
 function App() {
@@ -24,15 +25,16 @@ function App() {
                         <Sidebar />
                         <div className="app-main-content">
                             <Routes>
-                                <Route path="/" element={
+                                <Route path="/intelligence" element={<DailyIntelligence />} />
+                                <Route path="/screener" element={<Screener />} />
+                                <Route path="/profile" element={<ProfilePage />} />
+                                <Route path="/verify-email" element={<VerifyEmailPage />} />
+                                <Route path="/reset-password" element={<ResetPasswordPage />} />
+                                <Route path="/:ticker?" element={
                                     <main>
                                         <StockChart />
                                     </main>
                                 } />
-                                <Route path="/intelligence" element={<DailyIntelligence />} />
-                                <Route path="/screener" element={<Screener />} />
-                                <Route path="/verify-email" element={<VerifyEmailPage />} />
-                                <Route path="/reset-password" element={<ResetPasswordPage />} />
                             </Routes>
                         </div>
                     </div>

@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { openAuthModal, interpretQuota, errorText } from '../../utils/quota';
+import { useAuth } from '../../contexts/AuthContext';
 import './ChatPanel.css';
 
 const API_BASE = 'http://localhost:8000';
@@ -10,12 +12,13 @@ const MIN_WIDTH = 360;
 const MAX_WIDTH = 900;
 
 function ChatPanel() {
+    const { isAuthenticated } = useAuth();
     const [isOpen, setIsOpen] = useState(false);
     const [messages, setMessages] = useState([]);
     const [input, setInput] = useState('');
     const [isStreaming, setIsStreaming] = useState(false);
     const [conversationId, setConversationId] = useState(null);
-    const [toolCalls, setToolCalls] = useState([]);
+
     const [drawerWidth, setDrawerWidth] = useState(DEFAULT_WIDTH);
     const isResizing = useRef(false);
     const messagesEndRef = useRef(null);
@@ -27,13 +30,21 @@ function ChatPanel() {
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages, toolCalls, scrollToBottom]);
+    }, [messages, scrollToBottom]);
 
     useEffect(() => {
         if (isOpen && inputRef.current) {
             inputRef.current.focus();
         }
     }, [isOpen]);
+
+    // Reset conversation when auth state changes (login / logout).
+    // Prevents the logged-in session from inheriting a broken anonymous
+    // conversation that has stale tool_call IDs in its history.
+    useEffect(() => {
+        setConversationId(null);
+        setMessages([]);
+    }, [isAuthenticated]);
 
     const handleResizeStart = useCallback((e) => {
         e.preventDefault();
@@ -64,10 +75,8 @@ function ChatPanel() {
         setInput('');
         setMessages(prev => [...prev, { role: 'user', content: text }]);
         setIsStreaming(true);
-        setToolCalls([]);
 
         let assistantContent = '';
-        let currentToolCalls = [];
 
         try {
             const resp = await fetch(`${API_BASE}/api/ai/chat`, {
@@ -79,6 +88,19 @@ function ChatPanel() {
                     conversation_id: conversationId,
                 }),
             });
+
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                const quota = interpretQuota(err.detail);
+                setMessages(prev => [...prev, {
+                    role: 'assistant',
+                    content: quota ? quota.message : `Error: ${errorText(err.detail, 'Request failed')}`,
+                    isError: !quota,
+                    isQuota: !!quota,
+                    canRegister: quota?.canRegister,
+                }]);
+                return;
+            }
 
             const reader = resp.body.getReader();
             const decoder = new TextDecoder();
@@ -108,22 +130,7 @@ function ChatPanel() {
                             break;
 
                         case 'tool_call':
-                            currentToolCalls = [...currentToolCalls, {
-                                name: event.name,
-                                arguments: event.arguments,
-                                status: 'running',
-                                result: null,
-                            }];
-                            setToolCalls([...currentToolCalls]);
-                            break;
-
                         case 'tool_result':
-                            currentToolCalls = currentToolCalls.map(tc =>
-                                tc.name === event.name && tc.status === 'running'
-                                    ? { ...tc, status: 'done', result: event.data }
-                                    : tc
-                            );
-                            setToolCalls([...currentToolCalls]);
                             break;
 
                         case 'text':
@@ -143,7 +150,7 @@ function ChatPanel() {
                         case 'error':
                             setMessages(prev => [...prev, {
                                 role: 'assistant',
-                                content: `Error: ${event.content}`,
+                                content: `Something went wrong with the AI service. Please try again in a moment.`,
                                 isError: true,
                             }]);
                             break;
@@ -164,7 +171,6 @@ function ChatPanel() {
             }]);
         } finally {
             setIsStreaming(false);
-            setToolCalls([]);
         }
     };
 
@@ -178,22 +184,8 @@ function ChatPanel() {
     const handleNewChat = () => {
         setMessages([]);
         setConversationId(null);
-        setToolCalls([]);
     };
 
-    const toolDisplayName = (name) => {
-        const names = {
-            get_stock_price: 'Fetching price data',
-            get_technical_indicators: 'Analyzing indicators',
-            get_moving_averages: 'Checking moving averages',
-            get_company_overview: 'Looking up company info',
-            get_financial_statements: 'Reading financials',
-            get_news_sentiment: 'Checking news sentiment',
-            get_market_summary: 'Getting market overview',
-            compare_stocks: 'Comparing stocks',
-        };
-        return names[name] || name;
-    };
 
     return (
         <>
@@ -255,7 +247,7 @@ function ChatPanel() {
                     )}
 
                     {messages.map((msg, i) => (
-                        <div key={i} className={`chat-message ${msg.role} ${msg.isError ? 'error' : ''}`}>
+                        <div key={i} className={`chat-message ${msg.role} ${msg.isError ? 'error' : ''} ${msg.isQuota ? 'quota' : ''}`}>
                             {msg.role === 'assistant' ? (
                                 <div className="chat-message-content">
                                     <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
@@ -263,28 +255,20 @@ function ChatPanel() {
                             ) : (
                                 <div className="chat-message-content">{msg.content}</div>
                             )}
+                            {msg.isQuota && msg.canRegister && (
+                                <button className="chat-register-cta" onClick={() => openAuthModal('register')}>
+                                    Register Free →
+                                </button>
+                            )}
                         </div>
                     ))}
 
-                    {toolCalls.length > 0 && (
-                        <div className="chat-tool-calls">
-                            {toolCalls.map((tc, i) => (
-                                <div key={i} className={`tool-call-card ${tc.status}`}>
-                                    <span className="tool-call-icon">
-                                        {tc.status === 'running' ? '⏳' : '✓'}
-                                    </span>
-                                    <span className="tool-call-label">
-                                        {toolDisplayName(tc.name)}
-                                        {tc.arguments?.symbol ? ` (${tc.arguments.symbol})` : ''}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-
-                    {isStreaming && toolCalls.length === 0 && (
-                        <div className="chat-typing">
-                            <span></span><span></span><span></span>
+                    {isStreaming && (
+                        <div className="chat-thinking-bar">
+                            <div className="chat-thinking-dots">
+                                <span></span><span></span><span></span>
+                            </div>
+                            <span className="chat-thinking-text">Stock Matrix AI is working on that...</span>
                         </div>
                     )}
 

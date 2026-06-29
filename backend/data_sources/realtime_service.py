@@ -1,15 +1,19 @@
 """
 Real-time stock data service.
 
-Polls yfinance every 30s during market hours (9:30 AM – 4:00 PM ET, Mon–Fri)
+Polls yfinance every 15s during market hours (9:30 AM – 4:00 PM ET, Mon–Fri)
 for symbols that clients are actively watching. Pushes updates to connected
-WebSocket clients. Only updates the current trading day's OHLCV on the 1d chart.
+WebSocket clients.
+
+v2 optimizations:
+  - Concurrent per-symbol downloads via ThreadPoolExecutor (vs sequential)
+  - prev_close cached once per day (vs per-poll fast_info call)
+  - Poll interval 15s (vs 30s)
 """
 
 import asyncio
-import json
-import time as _time
-from datetime import datetime, time, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, time
 from typing import Dict, Set
 from zoneinfo import ZoneInfo
 
@@ -19,7 +23,7 @@ from fastapi import WebSocket
 ET = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
-POLL_INTERVAL = 30  # seconds
+POLL_INTERVAL = 15  # seconds
 
 
 class RealtimeService:
@@ -28,6 +32,8 @@ class RealtimeService:
         self._clients: Dict[WebSocket, Set[str]] = {}
         self._running = False
         self._task: asyncio.Task | None = None
+        self._prev_close: Dict[str, float] = {}
+        self._prev_close_date: str | None = None
 
     # ── market-hours check ────────────────────────────────
 
@@ -104,9 +110,7 @@ class RealtimeService:
     async def _poll_symbols(self, symbols: Set[str]):
         sym_list = list(symbols)
         try:
-            data = await asyncio.to_thread(
-                self._download_latest, sym_list
-            )
+            data = await asyncio.to_thread(self._download_latest, sym_list)
         except Exception as e:
             print(f"[realtime] download error: {e}")
             return
@@ -131,20 +135,55 @@ class RealtimeService:
         except Exception:
             pass
 
-    # ── yfinance download (runs in thread) ────────────────
+    # ── prev_close cache (once per day) ───────────────────
 
-    @staticmethod
-    def _download_latest(symbols: list[str]) -> Dict[str, dict]:
-        results: Dict[str, dict] = {}
-        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    def _ensure_prev_close(self, symbols: list[str]):
+        today = self._today_str()
+        if self._prev_close_date != today:
+            self._prev_close = {}
+            self._prev_close_date = today
 
-        for sym in symbols:
+        missing = [s for s in symbols if s not in self._prev_close]
+        if not missing:
+            return
+
+        def fetch_prev(sym):
             try:
                 yf_sym = sym.replace(".", "-")
-                ticker = yf.Ticker(yf_sym)
-                df = ticker.history(period="1d", interval="1m")
+                hist = yf.Ticker(yf_sym).history(period="5d", interval="1d")
+                if hist is not None and len(hist) >= 2:
+                    return sym, float(hist["Close"].iloc[-2])
+            except Exception:
+                pass
+            return None
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            for result in pool.map(fetch_prev, missing):
+                if result:
+                    sym, pc = result
+                    self._prev_close[sym] = pc
+
+    # ── concurrent yfinance download (runs in thread) ─────
+
+    def _download_latest(self, symbols: list[str]) -> Dict[str, dict]:
+        results: Dict[str, dict] = {}
+        today = self._today_str()
+
+        self._ensure_prev_close(symbols)
+
+        from zoneinfo import ZoneInfo
+        ts = int(
+            datetime.strptime(today, "%Y-%m-%d")
+            .replace(tzinfo=ZoneInfo("UTC"))
+            .timestamp()
+        )
+
+        def fetch_one(sym: str):
+            yf_sym = sym.replace(".", "-")
+            try:
+                df = yf.Ticker(yf_sym).history(period="1d", interval="1m")
                 if df is None or df.empty:
-                    continue
+                    return None
 
                 o = float(df["Open"].iloc[0])
                 h = float(df["High"].max())
@@ -152,26 +191,12 @@ class RealtimeService:
                 c = float(df["Close"].iloc[-1])
                 v = int(df["Volume"].sum())
 
-                prev_close = None
-                try:
-                    info = ticker.fast_info
-                    prev_close = float(info.get("previousClose", 0) or 0)
-                except Exception:
-                    pass
+                prev_close = self._prev_close.get(sym)
+                change = round(c - prev_close, 4) if prev_close else None
+                change_pct = (round((change / prev_close) * 100, 2)
+                              if prev_close and prev_close > 0 else None)
 
-                change = None
-                change_pct = None
-                if prev_close and prev_close > 0:
-                    change = round(c - prev_close, 4)
-                    change_pct = round((change / prev_close) * 100, 2)
-
-                ts = int(
-                    datetime.strptime(today, "%Y-%m-%d")
-                    .replace(tzinfo=ZoneInfo("America/New_York"))
-                    .timestamp()
-                )
-
-                results[sym] = {
+                return sym, {
                     "type": "price_update",
                     "symbol": sym,
                     "time": ts,
@@ -188,5 +213,12 @@ class RealtimeService:
                 }
             except Exception as e:
                 print(f"[realtime] error fetching {sym}: {e}")
+                return None
+
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            for result in pool.map(fetch_one, symbols):
+                if result:
+                    sym, data = result
+                    results[sym] = data
 
         return results

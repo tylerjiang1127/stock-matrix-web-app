@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { openAuthModal, interpretQuota, errorText } from '../../utils/quota';
 import './Screener.css';
 
 const API_BASE = 'http://localhost:8000';
@@ -19,6 +20,7 @@ function Screener() {
     const [isLoading, setIsLoading] = useState(false);
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
+    const [quota, setQuota] = useState(null);
     const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
     const inputRef = useRef(null);
 
@@ -28,17 +30,24 @@ function Screener() {
 
         setIsLoading(true);
         setError(null);
+        setQuota(null);
         setResult(null);
 
         try {
             const resp = await fetch(`${API_BASE}/api/ai/screener`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
                 body: JSON.stringify({ query: text, limit: 30 }),
             });
             if (!resp.ok) {
-                const err = await resp.json();
-                throw new Error(err.detail || 'Screening failed');
+                const err = await resp.json().catch(() => ({}));
+                const q = interpretQuota(err.detail);
+                if (q) {
+                    setQuota(q);
+                    return;
+                }
+                throw new Error(errorText(err.detail, 'Screening failed'));
             }
             const data = await resp.json();
             setResult(data);
@@ -150,13 +159,25 @@ function Screener() {
             {isLoading && (
                 <div className="screener-loading">
                     <div className="screener-spinner" />
-                    <p>Analyzing your criteria and scanning 500+ stocks...</p>
+                    <p>Analyzing your criteria and scanning 6800+ stocks...</p>
                 </div>
             )}
 
             {error && (
                 <div className="screener-error">
                     <p>{error}</p>
+                </div>
+            )}
+
+            {quota && (
+                <div className="screener-quota">
+                    <div className="screener-quota-icon">{'✨'}</div>
+                    <p className="screener-quota-msg">{quota.message}</p>
+                    {quota.canRegister && (
+                        <button className="screener-quota-btn" onClick={() => openAuthModal('register')}>
+                            Register Free →
+                        </button>
+                    )}
                 </div>
             )}
 

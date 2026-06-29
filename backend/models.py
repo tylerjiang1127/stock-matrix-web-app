@@ -31,6 +31,8 @@ class StockListModel(BaseModel):
     exchange: str
     market_cap: Optional[float] = None
     volume: Optional[int] = None
+    active: bool = True
+    consecutive_failures: int = 0
     created_at: datetime = datetime.now()
     updated_at: datetime = datetime.now()
 

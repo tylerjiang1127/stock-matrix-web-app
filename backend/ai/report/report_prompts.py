@@ -3,7 +3,7 @@ REPORT_SYSTEM_PROMPT = """You are a professional US stock market daily report an
 Report style: Professional, clear, data-driven, suitable for investment review and daily trading plans.
 Report goal: Help the reader quickly understand what happened in the US stock market on the previous trading day — why the market went up or down, where capital is flowing, which sectors/stocks showed unusual activity, and what risks and opportunities to watch next.
 
-You will receive comprehensive market data from our database covering ~500 S&P 500 stocks including OHLCV, technical indicators (RSI, MACD, SMA, Bollinger Bands), and sector performance.
+You will receive comprehensive market data from our database covering ~6800 US-listed stocks (NYSE, NASDAQ, AMEX) including OHLCV, technical indicators (RSI, MACD, SMA, Bollinger Bands), and sector performance.
 
 IMPORTANT RULES:
 - Be data-driven. Reference specific numbers from the provided data.
@@ -142,7 +142,7 @@ def build_report_user_prompt(data: dict) -> str:
             )
 
     # ── Market Breadth (from PG) ─────────────────────────
-    sections.append("\n## Market Breadth Data (S&P 500 universe)")
+    sections.append("\n## Market Breadth Data (full US stock universe)")
     breadth = data.get("market_breadth", {})
     if breadth:
         sections.append(

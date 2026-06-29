@@ -1,9 +1,121 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createChart, ColorType, CrosshairMode } from 'lightweight-charts';
+import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../contexts/AuthContext';
 import './StockChart.css';
 
+// ── Monitor list indicator interpreters ─────
+function interpretRSI(rsi) {
+    if (rsi == null) return { label: '--', color: '#888' };
+    if (rsi > 70) return { label: 'Overbought', color: '#ef5350' };
+    if (rsi < 30) return { label: 'Oversold', color: '#26a69a' };
+    return { label: 'Neutral', color: '#888' };
+}
+
+function interpretMACD(hist, prevHist) {
+    if (hist == null) return { label: '--', color: '#888' };
+    if (prevHist != null && prevHist < 0 && hist >= 0) return { label: 'Golden Cross', color: '#26a69a' };
+    if (prevHist != null && prevHist >= 0 && hist < 0) return { label: 'Death Cross', color: '#ef5350' };
+    if (hist > 0) return { label: 'Bullish', color: '#26a69a' };
+    return { label: 'Bearish', color: '#ef5350' };
+}
+
+function interpretKDJ(k, d, j, prevK, prevD) {
+    if (k == null || d == null) return { label: '--', color: '#888' };
+    if (j != null && j > 100) return { label: 'Overbought', color: '#ef5350' };
+    if (j != null && j < 0) return { label: 'Oversold', color: '#26a69a' };
+    if (prevK != null && prevD != null && prevK < prevD && k >= d) return { label: 'Golden Cross', color: '#26a69a' };
+    if (prevK != null && prevD != null && prevK >= prevD && k < d) return { label: 'Death Cross', color: '#ef5350' };
+    if (k > d) return { label: 'Bullish', color: '#26a69a' };
+    return { label: 'Bearish', color: '#ef5350' };
+}
+
+// ── Live indicator helpers (pure functions, no React dependency) ─────
+function calcSMA(closes, period) {
+    if (closes.length < period) return null;
+    const s = closes.slice(-period);
+    return s.reduce((a, b) => a + b, 0) / period;
+}
+
+function calcEMA(closes, period) {
+    if (closes.length < period) return null;
+    const k = 2 / (period + 1);
+    let ema = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    for (let i = period; i < closes.length; i++) ema = closes[i] * k + ema * (1 - k);
+    return ema;
+}
+
+function calcWMA(closes, period) {
+    if (closes.length < period) return null;
+    const s = closes.slice(-period);
+    let wSum = 0, dSum = 0;
+    for (let i = 0; i < period; i++) { const w = i + 1; wSum += s[i] * w; dSum += w; }
+    return wSum / dSum;
+}
+
+function calcBBands(closes, period = 20, mult = 2) {
+    const sma = calcSMA(closes, period);
+    if (sma === null) return null;
+    const s = closes.slice(-period);
+    const std = Math.sqrt(s.reduce((sum, c) => sum + (c - sma) ** 2, 0) / period);
+    return { upper: sma + mult * std, lower: sma - mult * std };
+}
+
+function calcRSI(closes, period = 14) {
+    if (closes.length < period + 1) return null;
+    let avgGain = 0, avgLoss = 0;
+    for (let i = 1; i <= period; i++) {
+        const d = closes[i] - closes[i - 1];
+        if (d > 0) avgGain += d; else avgLoss -= d;
+    }
+    avgGain /= period; avgLoss /= period;
+    for (let i = period + 1; i < closes.length; i++) {
+        const d = closes[i] - closes[i - 1];
+        avgGain = (avgGain * (period - 1) + (d > 0 ? d : 0)) / period;
+        avgLoss = (avgLoss * (period - 1) + (d < 0 ? -d : 0)) / period;
+    }
+    if (avgLoss === 0) return 100;
+    return 100 - 100 / (1 + avgGain / avgLoss);
+}
+
+function calcMACD(closes) {
+    if (closes.length < 35) return null;
+    const k12 = 2 / 13, k26 = 2 / 27, k9 = 2 / 10;
+    let ema12 = closes.slice(0, 12).reduce((a, b) => a + b, 0) / 12;
+    let ema26 = closes.slice(0, 26).reduce((a, b) => a + b, 0) / 26;
+    for (let i = 12; i < 26; i++) ema12 = closes[i] * k12 + ema12 * (1 - k12);
+    const macdVals = [ema12 - ema26];
+    for (let i = 26; i < closes.length; i++) {
+        ema12 = closes[i] * k12 + ema12 * (1 - k12);
+        ema26 = closes[i] * k26 + ema26 * (1 - k26);
+        macdVals.push(ema12 - ema26);
+    }
+    if (macdVals.length < 9) return null;
+    let signal = macdVals.slice(0, 9).reduce((a, b) => a + b, 0) / 9;
+    for (let i = 9; i < macdVals.length; i++) signal = macdVals[i] * k9 + signal * (1 - k9);
+    const last = macdVals[macdVals.length - 1];
+    return { macd: last, signal, histogram: last - signal };
+}
+
+function calcKDJ(closes, highs, lows, period = 9) {
+    if (closes.length < period) return null;
+    let k = 50, d = 50;
+    for (let i = period - 1; i < closes.length; i++) {
+        const hh = Math.max(...highs.slice(i - period + 1, i + 1));
+        const ll = Math.min(...lows.slice(i - period + 1, i + 1));
+        const rsv = hh === ll ? 50 : ((closes[i] - ll) / (hh - ll)) * 100;
+        k = (2 / 3) * k + (1 / 3) * rsv;
+        d = (2 / 3) * d + (1 / 3) * k;
+    }
+    return { k, d, j: 3 * k - 2 * d };
+}
+
 const StockChart = () => {
+    const { ticker: urlTicker } = useParams();
+    const navigate = useNavigate();
+    const initialTicker = (urlTicker || 'AAPL').toUpperCase();
+
     // three chart containers references
     const priceChartRef = useRef();
     const volumeChartRef = useRef();
@@ -31,6 +143,7 @@ const StockChart = () => {
     const verticalLineRefs = useRef([]);
     
     const [stockData, setStockData] = useState(null);
+    const stockDataRef = useRef(null);
     const [loading, setLoading] = useState(false); // Global loading (Ticker changes only)
     const [chartLoading, setChartLoading] = useState(false); // Chart loading (Interval changes)
     const [maLoading, setMaLoading] = useState(false); // MA specific loading
@@ -44,7 +157,26 @@ const StockChart = () => {
     }); // store crosshair position data
     const [currentTime, setCurrentTime] = useState(null); // store current mouse position time
     const [highlightedMA, setHighlightedMA] = useState(null);
-    
+
+    // Monitoring list state
+    const { isAuthenticated, entitlements, loading: authLoading } = useAuth();
+    // Initialize from localStorage so the list shows instantly on load (no empty flash
+    // while auth resolves); the load effect then reconciles with PG (source of truth).
+    const [monitorList, setMonitorList] = useState(() => {
+        try { return JSON.parse(localStorage.getItem('stock_matrix_monitor_list') || '[]'); }
+        catch { return []; }
+    });
+    const [monitorQuotes, setMonitorQuotes] = useState({});
+    const monitorPollRefs = useRef({});
+    const MONITOR_LIST_KEY = 'stock_matrix_monitor_list';
+    const MAX_MONITOR_STOCKS = 5;  // anonymous default / fallback
+    // Tier-aware cap (base 10, premium 20); anonymous falls back to 5.
+    const monitorMax = entitlements?.monitor_max ?? MAX_MONITOR_STOCKS;
+    // Grandfathering: a lapsed premium user may hold more than their current cap.
+    const monitorOverLimit = monitorList.length > monitorMax;
+
+    useEffect(() => { stockDataRef.current = stockData; }, [stockData]);
+
     // Stock list for search functionality
     const [stockList, setStockList] = useState([]);
     const [filteredStocks, setFilteredStocks] = useState([]);
@@ -52,7 +184,7 @@ const StockChart = () => {
     
     // Separate state for search inputs (Form State)
     const [searchParams, setSearchParams] = useState({
-        ticker: 'AAPL',
+        ticker: initialTicker,
         interval: '1d',
         ma_options: 'sma',
         tech_ind: 'macd'
@@ -60,11 +192,20 @@ const StockChart = () => {
 
     // Active chart configuration (Dashboard State) - updated only on search
     const [chartConfig, setChartConfig] = useState({
-        ticker: 'AAPL',
+        ticker: initialTicker,
         interval: '1d',
         ma_options: 'sma',
         tech_ind: 'macd'
     });
+    const chartConfigRef = useRef(chartConfig);
+    useEffect(() => { chartConfigRef.current = chartConfig; }, [chartConfig]);
+    useEffect(() => {
+        const current = chartConfig.ticker.toUpperCase();
+        const urlCurrent = (urlTicker || 'AAPL').toUpperCase();
+        if (current !== urlCurrent) {
+            navigate('/' + current, { replace: true });
+        }
+    }, [chartConfig.ticker]);
 
     // Store time ranges from backend
     const [timeRanges, setTimeRanges] = useState([]);
@@ -276,51 +417,75 @@ const StockChart = () => {
     }, [stockData]);
 
     // base chart config
-    const getBaseChartConfig = (height) => ({
-        layout: {
-            background: { type: ColorType.Solid, color: 'white' },
-            textColor: 'black',
-            fontFamily: 'Raleway, sans-serif',
-            fontSize: 12,
-        },
-        grid: {
-            vertLines: { visible: false },
-            horzLines: { visible: false },
-        },
-        crosshair: {
-            mode: CrosshairMode.Normal,
-            vertLine: { 
-                color: 'rgba(0, 0, 0, 0.5)', 
-                width: 1, 
-                style: 0,
-                labelVisible: true
+    const getBaseChartConfig = (height) => {
+        const showTime = !['1d', '1wk', '1mo'].includes(chartConfig.interval);
+        return {
+            layout: {
+                background: { type: ColorType.Solid, color: 'white' },
+                textColor: 'black',
+                fontFamily: 'Raleway, sans-serif',
+                fontSize: 12,
             },
-            horzLine: { 
-                color: 'rgba(0, 0, 0, 0.5)', 
-                width: 1, 
-                style: 0,
-                labelVisible: true
+            grid: {
+                vertLines: { visible: false },
+                horzLines: { visible: false },
             },
-        },
-        rightPriceScale: {
-            borderColor: 'rgba(197, 203, 206, 1)',
-            scaleMargins: {
-                top: 0.1,
-                bottom: 0.1,
+            crosshair: {
+                mode: CrosshairMode.Normal,
+                vertLine: {
+                    color: 'rgba(0, 0, 0, 0.5)',
+                    width: 1,
+                    style: 0,
+                    labelVisible: true
+                },
+                horzLine: {
+                    color: 'rgba(0, 0, 0, 0.5)',
+                    width: 1,
+                    style: 0,
+                    labelVisible: true
+                },
             },
-            width: 80, // Fixed width for horizontal alignment across stacked charts
-        },
-        timeScale: {
-            borderColor: 'rgba(197, 203, 206, 1)',
-            timeVisible: true,
-            secondsVisible: false,
-            fixLeftEdge: true,
-            fixRightEdge: true,
-            rightOffset: 0, // Ensure same right edge alignment across stacked charts
-            barSpacing: 6, // Fixed bar spacing for alignment
-        },
-        height: height,
-    });
+            rightPriceScale: {
+                borderColor: 'rgba(197, 203, 206, 1)',
+                scaleMargins: {
+                    top: 0.1,
+                    bottom: 0.1,
+                },
+                width: 80,
+            },
+            timeScale: {
+                borderColor: 'rgba(197, 203, 206, 1)',
+                timeVisible: showTime,
+                secondsVisible: false,
+                fixLeftEdge: true,
+                fixRightEdge: true,
+                rightOffset: 0,
+                barSpacing: 6,
+            },
+            localization: {
+                timeFormatter: (ts) => {
+                    // lightweight-charts v4 passes originalTime: string "YYYY-MM-DD" for daily,
+                    // BusinessDay object {year,month,day} for BusinessDay mode,
+                    // or Unix int for intraday.
+                    if (typeof ts === 'string') return ts;
+                    if (ts !== null && typeof ts === 'object') {
+                        return `${ts.year}-${String(ts.month).padStart(2, '0')}-${String(ts.day).padStart(2, '0')}`;
+                    }
+                    const d = new Date(ts * 1000);
+                    const y = d.getUTCFullYear();
+                    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+                    const day = String(d.getUTCDate()).padStart(2, '0');
+                    if (showTime) {
+                        const hh = String(d.getUTCHours()).padStart(2, '0');
+                        const mm = String(d.getUTCMinutes()).padStart(2, '0');
+                        return `${y}-${m}-${day} ${hh}:${mm}`;
+                    }
+                    return `${y}-${m}-${day}`;
+                },
+            },
+            height: height,
+        };
+    };
 
     // create vertical indicator line
     const createVerticalLine = (container, chartIndex) => {
@@ -411,9 +576,231 @@ const StockChart = () => {
         }
     };
 
-    // ── Real-time WebSocket ────────────────────────────
+    // ── Real-time WebSocket + Live Quotes Polling ──────
     const wsRef = useRef(null);
     const [realtimeStatus, setRealtimeStatus] = useState(null); // null | 'connected' | 'market_closed'
+    const realtimeStatusRef = useRef(null);
+    useEffect(() => { realtimeStatusRef.current = realtimeStatus; }, [realtimeStatus]);
+    const isBackfillRef = useRef(false);
+    const savedRangeRef = useRef(null);
+    const fullHistoryLoadedRef = useRef(false);
+    const lazyFetchParamsRef = useRef(null); // stores {chartUrl, chartBody} for on-demand history fetch
+    const lastRenderedKeyRef = useRef(null); // tracks ticker-interval to gate fitContent
+    const lastCandlestickDataRef = useRef(null); // tracks candlestick_data reference to skip /info re-renders
+    const [livePrice, setLivePrice] = useState(null);
+    const liveCandleRef = useRef(null);
+    const blinkIntervalRef = useRef(null);
+    const liveQuotePollRef = useRef(null);
+    const liveQuoteDataRef = useRef(null);
+    // Guards the one-time visible-range nudge that reveals the current trading day's
+    // live candle (PG data ends at the prior pipeline candle, so the initial
+    // fitContent() leaves today's candle just off the right edge). Reset per fetch.
+    const didInitialLiveFitRef = useRef(false);
+
+    // Re-anchor all three charts so the right edge lands on `ts` (the live candle / current
+    // trading day) plus a little padding, while preserving the current visible span. Used
+    // both when the live quote arrives and after the backfill restores its range, so the
+    // view ends on today regardless of which async response wins the race.
+    const anchorViewToLiveCandle = (ts) => {
+        if (!priceChart.current || !ts) return;
+        try {
+            const vr = priceChart.current.timeScale().getVisibleRange();
+            if (!vr || vr.from == null || vr.to == null) return;
+            const span = vr.to - vr.from;
+            const pad = Math.max(span * 0.03, 86400); // ~3% of span, min 1 day
+            const to = ts + pad;
+            const from = to - span;
+            [priceChart.current, volumeChart.current, technicalChart.current].forEach(c => {
+                if (c) {
+                    try { c.timeScale().setVisibleRange({ from, to }); } catch (_) {}
+                }
+            });
+        } catch (_) {}
+    };
+
+    const applyLiveQuote = (q) => {
+        if (!q || !q.close) return;
+        // Daily charts use "YYYY-MM-DD" string (Business Day format, matches candlestick data).
+        // Intraday charts use Unix timestamp integers.
+        const isDailyInterval = ['1d', '1wk', '1mo'].includes(chartConfigRef.current.interval);
+        const resolvedTs = isDailyInterval
+            ? (q.trading_date || null)
+            : (q.market_date_ts || null);
+        setLivePrice({ price: q.close, change: q.change, change_pct: q.change_pct });
+
+        const isDaily = chartConfigRef.current.interval === '1d';
+        if (!isDaily) return;
+
+        if (candlestickSeries.current && resolvedTs) {
+            liveCandleRef.current = { time: resolvedTs, open: q.open, high: q.high, low: q.low, close: q.close };
+            candlestickSeries.current.update(liveCandleRef.current);
+        }
+        if (volumeSeries.current && resolvedTs) {
+            volumeSeries.current.update({
+                time: resolvedTs,
+                value: q.volume,
+                color: q.close >= q.open ? 'rgba(0, 150, 136, 0.8)' : 'rgba(255,82,82, 0.8)',
+            });
+        }
+
+        // Update MA series from live_quotes indicator values
+        const maType = (chartConfigRef.current.ma_options || 'sma').toLowerCase();
+        if (resolvedTs) {
+            Object.entries(maSeries.current).forEach(([name, series]) => {
+                if (name.startsWith('BBANDS')) return;
+                const m = name.match(/(\d+)$/);
+                if (!m) return;
+                const key = maType + m[1];
+                if (q[key] != null) series.update({ time: resolvedTs, value: q[key] });
+            });
+
+            if (q.bbands_upper != null && maSeries.current['BBANDS_UPPER'])
+                maSeries.current['BBANDS_UPPER'].update({ time: resolvedTs, value: q.bbands_upper });
+            if (q.bbands_lower != null && maSeries.current['BBANDS_LOWER'])
+                maSeries.current['BBANDS_LOWER'].update({ time: resolvedTs, value: q.bbands_lower });
+
+            const techInd = chartConfigRef.current.tech_ind;
+            if (techInd === 'macd') {
+                if (q.macd != null && technicalSeries.current.macd)
+                    technicalSeries.current.macd.update({ time: resolvedTs, value: q.macd });
+                if (q.macd_signal != null && technicalSeries.current.signal)
+                    technicalSeries.current.signal.update({ time: resolvedTs, value: q.macd_signal });
+                if (q.macd_hist != null && technicalSeries.current.histogram)
+                    technicalSeries.current.histogram.update({ time: resolvedTs, value: q.macd_hist, color: q.macd_hist >= 0 ? '#26a69a' : '#ef5350' });
+            } else if (techInd === 'rsi') {
+                if (q.rsi != null && technicalSeries.current.rsi)
+                    technicalSeries.current.rsi.update({ time: resolvedTs, value: q.rsi });
+            } else if (techInd === 'kdj') {
+                if (q.k != null && technicalSeries.current.k_line)
+                    technicalSeries.current.k_line.update({ time: resolvedTs, value: q.k });
+                if (q.d != null && technicalSeries.current.d_line)
+                    technicalSeries.current.d_line.update({ time: resolvedTs, value: q.d });
+                if (q.j != null && technicalSeries.current.j_line)
+                    technicalSeries.current.j_line.update({ time: resolvedTs, value: q.j });
+            }
+        }
+    };
+
+    const startLiveQuotePoll = (symbol) => {
+        if (liveQuotePollRef.current) clearInterval(liveQuotePollRef.current);
+        liveQuotePollRef.current = setInterval(() => {
+            axios.get('http://localhost:8000/api/live-quotes/' + symbol)
+                .then(res => {
+                    if (res.data.found) applyLiveQuote(res.data);
+                })
+                .catch(() => {});
+        }, 5000);
+    };
+
+    const stopLiveQuotePoll = () => {
+        if (liveQuotePollRef.current) {
+            clearInterval(liveQuotePollRef.current);
+            liveQuotePollRef.current = null;
+        }
+    };
+
+    // ── Monitor list persistence & polling ─────
+    const loadMonitorList = useCallback(async () => {
+        if (isAuthenticated) {
+            try {
+                const res = await axios.get('http://localhost:8000/api/monitor-list', { withCredentials: true });
+                setMonitorList(res.data.symbols || []);
+                localStorage.setItem(MONITOR_LIST_KEY, JSON.stringify(res.data.symbols || []));
+            } catch { /* fall back to localStorage */
+                try { setMonitorList(JSON.parse(localStorage.getItem(MONITOR_LIST_KEY) || '[]')); } catch { setMonitorList([]); }
+            }
+        } else {
+            try { setMonitorList(JSON.parse(localStorage.getItem(MONITOR_LIST_KEY) || '[]')); } catch { setMonitorList([]); }
+        }
+    }, [isAuthenticated]);
+
+    const addToMonitorList = useCallback(async (symbol) => {
+        symbol = symbol.toUpperCase();
+        if (monitorList.length >= monitorMax || monitorList.includes(symbol)) return;
+        const newList = [...monitorList, symbol];
+        setMonitorList(newList);
+        localStorage.setItem(MONITOR_LIST_KEY, JSON.stringify(newList));
+        if (isAuthenticated) {
+            axios.post('http://localhost:8000/api/monitor-list/' + symbol, {}, { withCredentials: true }).catch(() => {});
+        }
+        axios.post('http://localhost:8000/api/live-quotes/' + symbol + '/subscribe').catch(() => {});
+    }, [monitorList, isAuthenticated, monitorMax]);
+
+    const removeFromMonitorList = useCallback(async (symbol) => {
+        symbol = symbol.toUpperCase();
+        const newList = monitorList.filter(s => s !== symbol);
+        setMonitorList(newList);
+        localStorage.setItem(MONITOR_LIST_KEY, JSON.stringify(newList));
+        if (isAuthenticated) {
+            axios.delete('http://localhost:8000/api/monitor-list/' + symbol, { withCredentials: true }).catch(() => {});
+        }
+        axios.post('http://localhost:8000/api/live-quotes/' + symbol + '/unsubscribe').catch(() => {});
+        if (monitorPollRefs.current[symbol]) {
+            clearInterval(monitorPollRefs.current[symbol]);
+            delete monitorPollRefs.current[symbol];
+        }
+        setMonitorQuotes(prev => { const next = { ...prev }; delete next[symbol]; return next; });
+    }, [monitorList, isAuthenticated]);
+
+    // Load monitor list once auth is RESOLVED. Gating on authLoading is essential:
+    // running while auth is still resolving caused a race where the anonymous phase
+    // clobbered the logged-in list (and overwrote localStorage with []).
+    useEffect(() => {
+        if (authLoading) return;  // wait until we know if the user is logged in
+        if (isAuthenticated) {
+            // PG is the source of truth. Merge any stocks added while anonymous, once.
+            const localList = JSON.parse(localStorage.getItem(MONITOR_LIST_KEY) || '[]');
+            if (localList.length > 0) {
+                axios.post('http://localhost:8000/api/monitor-list/sync', { symbols: localList }, { withCredentials: true })
+                    .then(res => {
+                        setMonitorList(res.data.symbols || []);
+                        localStorage.setItem(MONITOR_LIST_KEY, JSON.stringify(res.data.symbols || []));
+                    })
+                    .catch(() => loadMonitorList());
+            } else {
+                loadMonitorList();
+            }
+        } else {
+            loadMonitorList();
+        }
+    }, [isAuthenticated, authLoading, loadMonitorList]);
+
+    // Manage per-symbol polling for monitored stocks
+    useEffect(() => {
+        const activeSymbols = new Set(Object.keys(monitorPollRefs.current));
+
+        monitorList.forEach(symbol => {
+            if (!activeSymbols.has(symbol)) {
+                axios.post('http://localhost:8000/api/live-quotes/' + symbol + '/subscribe').catch(() => {});
+                // Immediate fetch
+                axios.get('http://localhost:8000/api/live-quotes/' + symbol)
+                    .then(res => { if (res.data.found) setMonitorQuotes(prev => ({ ...prev, [symbol]: res.data })); })
+                    .catch(() => {});
+                // 5s polling
+                monitorPollRefs.current[symbol] = setInterval(() => {
+                    axios.get('http://localhost:8000/api/live-quotes/' + symbol)
+                        .then(res => { if (res.data.found) setMonitorQuotes(prev => ({ ...prev, [symbol]: res.data })); })
+                        .catch(() => {});
+                }, 5000);
+            }
+        });
+
+        activeSymbols.forEach(symbol => {
+            if (!monitorList.includes(symbol)) {
+                clearInterval(monitorPollRefs.current[symbol]);
+                delete monitorPollRefs.current[symbol];
+                axios.post('http://localhost:8000/api/live-quotes/' + symbol + '/unsubscribe').catch(() => {});
+            }
+        });
+
+        return () => {
+            Object.keys(monitorPollRefs.current).forEach(symbol => {
+                clearInterval(monitorPollRefs.current[symbol]);
+                axios.post('http://localhost:8000/api/live-quotes/' + symbol + '/unsubscribe').catch(() => {});
+            });
+            monitorPollRefs.current = {};
+        };
+    }, [monitorList]);
 
     useEffect(() => {
         const shouldConnect = chartConfig.interval === '1d' && chartConfig.ticker;
@@ -423,6 +810,7 @@ const StockChart = () => {
                 wsRef.current = null;
                 setRealtimeStatus(null);
             }
+            stopLiveQuotePoll();
             return;
         }
 
@@ -441,28 +829,44 @@ const StockChart = () => {
                     const msg = JSON.parse(evt.data);
 
                     if (msg.type === 'status') {
-                        setRealtimeStatus(msg.market_open ? 'connected' : 'market_closed');
+                        const isOpen = msg.market_open;
+                        setRealtimeStatus(isOpen ? 'connected' : 'market_closed');
+                        if (!isOpen) {
+                            stopLiveQuotePoll();
+                            if (blinkIntervalRef.current) {
+                                clearInterval(blinkIntervalRef.current);
+                                blinkIntervalRef.current = null;
+                            }
+                            if (candlestickSeries.current && liveCandleRef.current) {
+                                const c = liveCandleRef.current;
+                                const normal = c.close >= c.open ? '#26a69a' : '#ef5350';
+                                candlestickSeries.current.update({ ...c, color: normal, borderColor: normal, wickColor: normal });
+                                liveCandleRef.current = null;
+                            }
+                        } else {
+                            startLiveQuotePoll(chartConfigRef.current.ticker);
+                        }
                         return;
                     }
 
-                    if (msg.type === 'price_update' && msg.symbol === chartConfig.ticker) {
+                    if (msg.type === 'live_quote' && msg.symbol === chartConfigRef.current.ticker) {
+                        applyLiveQuote(msg);
+                        if (msg.close) setRealtimeStatus(prev => prev || 'connected');
+                    }
+
+                    if (msg.type === 'price_update' && msg.symbol === chartConfigRef.current.ticker) {
                         setRealtimeStatus('connected');
+                        setLivePrice({ price: msg.close, change: msg.change, change_pct: msg.change_pct });
 
                         if (candlestickSeries.current) {
-                            candlestickSeries.current.update({
-                                time: msg.time,
-                                open: msg.open,
-                                high: msg.high,
-                                low: msg.low,
-                                close: msg.close,
-                            });
+                            liveCandleRef.current = { time: msg.time, open: msg.open, high: msg.high, low: msg.low, close: msg.close };
+                            candlestickSeries.current.update(liveCandleRef.current);
                         }
-
                         if (volumeSeries.current) {
                             volumeSeries.current.update({
                                 time: msg.time,
                                 value: msg.volume,
-                                color: msg.close >= msg.open ? 'green' : 'red',
+                                color: msg.close >= msg.open ? 'rgba(0, 150, 136, 0.8)' : 'rgba(255,82,82, 0.8)',
                             });
                         }
                     }
@@ -479,13 +883,41 @@ const StockChart = () => {
 
         connect();
 
+        // Candlestick border blink — toggles every 1s on the live candle
+        let blinkPhase = false;
+        blinkIntervalRef.current = setInterval(() => {
+            if (!candlestickSeries.current || !liveCandleRef.current) return;
+            blinkPhase = !blinkPhase;
+            const c = liveCandleRef.current;
+            const isUp = c.close >= c.open;
+            const normal = isUp ? '#26a69a' : '#ef5350';
+            if (blinkPhase) {
+                candlestickSeries.current.update({
+                    ...c,
+                    color: isUp ? '#4dd0c0' : '#ff8a80',
+                    borderColor: '#ffffff',
+                    wickColor: '#ffffff',
+                });
+            } else {
+                candlestickSeries.current.update({
+                    ...c,
+                    color: normal,
+                    borderColor: normal,
+                    wickColor: normal,
+                });
+            }
+        }, 1000);
+
         return () => {
             clearTimeout(reconnectTimer);
+            clearInterval(blinkIntervalRef.current);
+            stopLiveQuotePoll();
             if (ws) {
                 ws.onclose = null;
                 ws.close();
             }
             wsRef.current = null;
+            liveCandleRef.current = null;
             setRealtimeStatus(null);
         };
     }, [chartConfig.ticker, chartConfig.interval]);
@@ -524,7 +956,9 @@ const StockChart = () => {
                 candlestickSeries.current = priceChart.current.addCandlestickSeries({
                     upColor: '#26a69a',
                     downColor: '#ef5350',
-                    borderVisible: false,
+                    borderVisible: true,
+                    borderUpColor: '#26a69a',
+                    borderDownColor: '#ef5350',
                     wickUpColor: '#26a69a',
                     wickDownColor: '#ef5350',
                 priceFormat: {
@@ -588,15 +1022,35 @@ const StockChart = () => {
             setTimeout(() => {
                 const validCharts = charts.filter(Boolean);
                 allCharts.current = validCharts; // store all charts references
-                
+
                 validCharts.forEach((chart, index) => {
                     if (chart && chart.timeScale) {
                         // time axis sync
                         chart.timeScale().subscribeVisibleTimeRangeChange((visibleRange) => {
                             syncTimeScale(chart, visibleRange);
                         });
-                        
 
+                        // lazy history load: trigger when user scrolls to left edge
+                        if (index === 0) {
+                            chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+                                if (!range) return;
+                                if (fullHistoryLoadedRef.current) return;
+                                if (!lazyFetchParamsRef.current) return;
+                                if (range.from > 5) return; // not near left edge yet
+
+                                fullHistoryLoadedRef.current = true; // mark immediately to prevent double-fire
+                                const { chartUrl, chartBody } = lazyFetchParamsRef.current;
+                                axios.post(chartUrl, { ...chartBody, days: 36500 }).then(full => {
+                                    isBackfillRef.current = true;
+                                    if (priceChart.current) {
+                                        try { savedRangeRef.current = priceChart.current.timeScale().getVisibleRange(); } catch (_) {}
+                                    }
+                                    setStockData(prev => ({ ...prev, ...full.data }));
+                                }).catch(() => {
+                                    fullHistoryLoadedRef.current = false; // allow retry on error
+                                });
+                            });
+                        }
                     }
                 });
             }, 100);
@@ -724,6 +1178,34 @@ const StockChart = () => {
         };
     }, []);
 
+    useEffect(() => {
+        const showTime = !['1d', '1wk', '1mo'].includes(chartConfig.interval);
+        const timeScaleOpts = { timeVisible: showTime, secondsVisible: false };
+        const locOpts = {
+            localization: {
+                timeFormatter: (ts) => {
+                    if (typeof ts === 'string') return ts;
+                    if (ts !== null && typeof ts === 'object') {
+                        return `${ts.year}-${String(ts.month).padStart(2, '0')}-${String(ts.day).padStart(2, '0')}`;
+                    }
+                    const d = new Date(ts * 1000);
+                    const y = d.getUTCFullYear();
+                    const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+                    const day = String(d.getUTCDate()).padStart(2, '0');
+                    if (showTime) {
+                        const hh = String(d.getUTCHours()).padStart(2, '0');
+                        const mm = String(d.getUTCMinutes()).padStart(2, '0');
+                        return `${y}-${m}-${day} ${hh}:${mm}`;
+                    }
+                    return `${y}-${m}-${day}`;
+                },
+            },
+        };
+        [priceChart.current, volumeChart.current, technicalChart.current].forEach(c => {
+            if (c) c.applyOptions({ timeScale: timeScaleOpts, ...locOpts });
+        });
+    }, [chartConfig.interval]);
+
     // get stock data
     // Fetch stock list from MongoDB
     const fetchStockList = async () => {
@@ -764,9 +1246,18 @@ const StockChart = () => {
         } else {
             setLoading(true);
             setFundamentalLoading(true);
+            setLivePrice(null);
+            liveCandleRef.current = null;
+            liveQuoteDataRef.current = null;
         }
 
         setError(null);
+        didInitialLiveFitRef.current = false;
+        lastRenderedKeyRef.current = null; // force fitContent on next render
+        // Block lazy load during transit: old params are stale, new params not yet set.
+        // fullHistoryLoadedRef is reset to false in useEffect after the initial render completes.
+        fullHistoryLoadedRef.current = true;
+        lazyFetchParamsRef.current = null;
 
         const params = {
             ticker: overrideParams.ticker || searchParams.ticker,
@@ -779,7 +1270,7 @@ const StockChart = () => {
         setChartConfig(prev => ({ ...prev, ...params }));
         setSearchParams(prev => ({ ...prev, ...params }));
 
-        // Phase 1: fast PG query (1-year default), renders chart immediately
+        // Phase 1: PG chart data + live quote fired in parallel, rendered together
         const chartBody = {
             interval: params.interval,
             ma_options: params.ma_options,
@@ -787,8 +1278,24 @@ const StockChart = () => {
         };
         const chartUrl = 'http://localhost:8000/api/stocks/' + params.ticker + '/chart';
 
-        const chartPromise = axios.post(chartUrl, chartBody).then(res => {
+        // Fire both requests simultaneously
+        const liveQuoteFetch = axios.get('http://localhost:8000/api/live-quotes/' + params.ticker)
+            .then(r => (r.data?.found && r.data?.close) ? r.data : null)
+            .catch(() => null);
+
+        const chartPromise = axios.post(chartUrl, chartBody).then(async res => {
             setError(null);
+
+            // Wait for live quote (already in-flight, minimal extra delay)
+            const liveData = await liveQuoteFetch;
+            if (liveData) liveQuoteDataRef.current = liveData;
+
+            // Store lazy params BEFORE setStockData so they're ready when re-render fires.
+            // fullHistoryLoadedRef stays true (set in fetchStockData) until useEffect
+            // re-enables it after the initial fitContent calls complete.
+            lazyFetchParamsRef.current = { chartUrl, chartBody };
+
+            // Single setStockData — chart + live quote render together
             setStockData(prev => ({ ...prev, ...res.data }));
             if (res.data.chart_config && res.data.chart_config.time_ranges) {
                 setTimeRanges(res.data.chart_config.time_ranges);
@@ -797,11 +1304,6 @@ const StockChart = () => {
             setChartLoading(false);
             setMaLoading(false);
             setTechLoading(false);
-
-            // Phase 2: silently backfill full history in background
-            axios.post(chartUrl, { ...chartBody, days: 36500 }).then(full => {
-                setStockData(prev => ({ ...prev, ...full.data }));
-            }).catch(() => {});
         }).catch(err => {
             setError(err.response?.data?.detail || 'Failed to fetch chart data');
             setLoading(false);
@@ -853,13 +1355,42 @@ const StockChart = () => {
         fetchStockData();
     }, []);
 
-    // completely rebuild event binding logic 
+    // completely rebuild event binding logic
     useEffect(() => {
         if (!stockData) return;
-        
+
+        // Skip chart re-render when only /info data changed (company_info, news, fundamentals).
+        // /info merges via {...prev, ...res.data} which keeps the same candlestick_data reference.
+        // Chart data changes (ticker/interval/MA) always produce a new array from the API response.
+        const hasChartDataChanged = stockData.candlestick_data !== lastCandlestickDataRef.current;
+        if (!hasChartDataChanged) return;
+        lastCandlestickDataRef.current = stockData.candlestick_data;
+
+        // isFirstRender: lastRenderedKeyRef is null before updateCharts sets it
+        const isFirstRender = lastRenderedKeyRef.current === null;
+
         // 1. First update the chart data
             updateCharts();
-        
+
+        // 1b. Re-apply live quote candle on top of PG data
+        if (liveQuoteDataRef.current && candlestickSeries.current) {
+            applyLiveQuote(liveQuoteDataRef.current);
+            // After live candle is added, re-fit so it's visible (first render only).
+            // updateCharts() calls fitContent() before the live candle exists,
+            // so we need one more fitContent() now that the candle is in the series.
+            if (isFirstRender && priceChart.current) {
+                [priceChart.current, volumeChart.current, technicalChart.current].forEach(c => {
+                    if (c) try { c.timeScale().fitContent(); } catch (_) {}
+                });
+            }
+        }
+
+        // All initial fitContent calls are done. Re-enable lazy load so the user
+        // can trigger full history by scrolling to the left edge.
+        if (isFirstRender) {
+            fullHistoryLoadedRef.current = false;
+        }
+
         // 2. Then bind events (delay to ensure the chart is updated)
         setTimeout(() => {
             const charts = [priceChart.current, volumeChart.current, technicalChart.current];
@@ -2213,24 +2744,36 @@ useEffect(() => {
         if (!stockData) return;
 
         try {
+            const isBackfill = isBackfillRef.current;
+
             // update price chart
             updatePriceChart();
-            
+
             // update volume chart
             updateVolumeChart();
-            
+
             // update technical indicators chart
             updateTechnicalChart();
 
-            // re-bind events (important!)
+            // re-bind events + restore range after layout settles
             setTimeout(() => {
                 if (priceChart.current) {
-                    // Crosshair move event already handled in chart initialization
-                    
+                    alignChartWidths();
                 }
-                // Ensure chart alignment after all updates
-                alignChartWidths();
-            }, 100);
+                // Restore visible range AFTER alignChartWidths (Issue 1 fix)
+                if (isBackfill && savedRangeRef.current && priceChart.current) {
+                    priceChart.current.timeScale().setVisibleRange(savedRangeRef.current);
+                    savedRangeRef.current = null;
+                    isBackfillRef.current = false;
+                    // Re-anchor to today after restore so the initial backfill never strands
+                    // the view at yesterday (covers the race where backfill's restore runs
+                    // after the live-quote view adjustment and would otherwise overwrite it).
+                    const lq = liveQuoteDataRef.current;
+                    if (didInitialLiveFitRef.current && lq?.trading_date) {
+                        anchorViewToLiveCandle(lq.trading_date);
+                    }
+                }
+            }, 150);
 
         } catch (error) {
             console.error('Error updating charts:', error);
@@ -2257,13 +2800,21 @@ useEffect(() => {
             // Update candlestick data
             if (candlestickSeries.current) {
                 candlestickSeries.current.setData(stockData.candlestick_data);
-                priceChart.current.timeScale().fitContent();
+                const renderKey = `${chartConfigRef.current.ticker}-${chartConfigRef.current.interval}`;
+                const isNewChart = lastRenderedKeyRef.current !== renderKey;
+                if (!isBackfillRef.current && isNewChart) {
+                    lastRenderedKeyRef.current = renderKey;
+                    priceChart.current.timeScale().fitContent();
+                    // Live candle anchor happens in useEffect after applyLiveQuote() runs
+                }
             } else {
                 // Recreate candlestick series if it doesn't exist
                 candlestickSeries.current = priceChart.current.addCandlestickSeries({
                     upColor: '#26a69a',
                     downColor: '#ef5350',
-                    borderVisible: false,
+                    borderVisible: true,
+                    borderUpColor: '#26a69a',
+                    borderDownColor: '#ef5350',
                     wickUpColor: '#26a69a',
                     wickDownColor: '#ef5350',
                     priceFormat: {
@@ -2768,11 +3319,61 @@ useEffect(() => {
                 {/* Left Column: Monitoring List */}
                 <div className="info-column">
                     <div className="chart-section">
-                        <div className="chart-title">
+                        <div className="chart-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span>Monitoring List</span>
+                            <span style={{ fontSize: '11px', opacity: 0.5, color: monitorOverLimit ? '#ffa94d' : undefined }}>{monitorList.length}/{monitorMax}</span>
                         </div>
-                        <div style={{ padding: '20px', minHeight: '200px' }}>
-                            {/* Content will be added later */}
+                        {monitorOverLimit && (
+                            <div style={{ padding: '6px 10px', fontSize: '11px', color: '#ffa94d', textAlign: 'center' }}>
+                                Over your plan limit — remove stocks to add new ones.
+                            </div>
+                        )}
+                        <div style={{ padding: '8px', minHeight: '80px' }}>
+                            {monitorList.length === 0 ? (
+                                <div style={{ padding: '20px 10px', textAlign: 'center', color: '#999', fontSize: '12px' }}>
+                                    Click <strong>+</strong> on the chart title to add stocks
+                                </div>
+                            ) : (
+                                monitorList.map(symbol => {
+                                    const q = monitorQuotes[symbol];
+                                    const changePct = q?.change_pct;
+                                    const isUp = (changePct ?? 0) >= 0;
+                                    const rsiInfo = interpretRSI(q?.rsi);
+                                    const macdInfo = interpretMACD(q?.macd_hist, q?.prev_macd_hist);
+                                    const kdjInfo = interpretKDJ(q?.k, q?.d, q?.j, q?.prev_k, q?.prev_d);
+
+                                    return (
+                                        <div
+                                            key={symbol}
+                                            className={`monitor-card${chartConfig.ticker === symbol ? ' monitor-card-active' : ''}`}
+                                            onClick={() => fetchStockData({ ticker: symbol })}
+                                            style={{ borderLeftColor: isUp ? '#26a69a' : '#ef5350' }}
+                                        >
+                                            <button
+                                                className="monitor-card-remove"
+                                                onClick={(e) => { e.stopPropagation(); removeFromMonitorList(symbol); }}
+                                                title="Remove"
+                                            >×</button>
+                                            <div className="monitor-card-header">
+                                                <span className="monitor-card-symbol">{symbol}</span>
+                                                <div className={`monitor-card-price${realtimeStatus === 'connected' ? ' monitor-price-live' : ''}`}>
+                                                    <span>{q?.close != null ? q.close.toFixed(2) : '--'}</span>
+                                                    {changePct != null && (
+                                                        <span style={{ color: isUp ? '#26a69a' : '#ef5350' }}>
+                                                            {changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="monitor-card-indicators">
+                                                <span className="indicator-pill" style={{ color: rsiInfo.color }}>RSI {rsiInfo.label}</span>
+                                                <span className="indicator-pill" style={{ color: macdInfo.color }}>MACD {macdInfo.label}</span>
+                                                <span className="indicator-pill" style={{ color: kdjInfo.color }}>KDJ {kdjInfo.label}</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
                         </div>
                     </div>
                 </div>
@@ -2850,6 +3451,24 @@ useEffect(() => {
                     <div className="chart-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
                             <span>Stock Price & Moving Averages</span>
+                            <button
+                                className={`monitor-add-btn${monitorList.includes(chartConfig.ticker) ? ' monitor-added' : ''}`}
+                                onClick={() => addToMonitorList(chartConfig.ticker)}
+                                title={monitorList.includes(chartConfig.ticker) ? 'Already in monitoring list' : monitorList.length >= monitorMax ? `Monitoring list full (max ${monitorMax}) — upgrade or remove stocks` : 'Add to monitoring list'}
+                                disabled={monitorList.length >= monitorMax || monitorList.includes(chartConfig.ticker)}
+                            >
+                                {monitorList.includes(chartConfig.ticker) ? '✓' : '+'}
+                            </button>
+                            {livePrice && (realtimeStatus === 'connected' || realtimeStatus === 'market_closed') && (
+                                <span className={`live-price-display${realtimeStatus === 'connected' ? ' blinking' : ''}`} style={{
+                                    color: (livePrice.change_pct ?? 0) >= 0 ? '#26a69a' : '#ef5350',
+                                }}>
+                                    {livePrice.price.toFixed(2)}
+                                    {livePrice.change_pct != null && (
+                                        <span> ({livePrice.change_pct >= 0 ? '+' : ''}{livePrice.change_pct.toFixed(2)}%)</span>
+                                    )}
+                                </span>
+                            )}
                             {realtimeStatus === 'connected' && (
                                 <span className="realtime-badge live">LIVE</span>
                             )}

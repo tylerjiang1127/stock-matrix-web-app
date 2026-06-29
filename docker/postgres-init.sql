@@ -630,12 +630,126 @@ CREATE INDEX IF NOT EXISTS idx_1wk_datetime ON interval_1wk_technical (datetime_
 CREATE INDEX IF NOT EXISTS idx_1mo_datetime ON interval_1mo_technical (datetime_index);
 
 -- =============================================
+-- Latest-per-symbol snapshot (perf for AI screener / market tools)
+-- =============================================
+-- Mirrors interval_1d_technical + prev_close, one row per symbol. Avoids scanning the
+-- 26M-row daily hypertable at request time. Populated/refreshed by the daily pipeline.
+CREATE TABLE IF NOT EXISTS latest_1d (LIKE interval_1d_technical INCLUDING DEFAULTS);
+ALTER TABLE latest_1d ADD COLUMN IF NOT EXISTS prev_close DECIMAL(15,4);
+ALTER TABLE latest_1d ADD COLUMN IF NOT EXISTS avg_vol_20 DOUBLE PRECISION;
+ALTER TABLE latest_1d ADD COLUMN IF NOT EXISTS std_vol_20 DOUBLE PRECISION;
+DO $$ BEGIN
+    ALTER TABLE latest_1d ADD PRIMARY KEY (symbol);
+EXCEPTION WHEN others THEN null; END $$;
+CREATE INDEX IF NOT EXISTS idx_latest_1d_rsi ON latest_1d (rsi);
+CREATE INDEX IF NOT EXISTS idx_latest_1d_close ON latest_1d (close);
+CREATE INDEX IF NOT EXISTS idx_latest_1d_macd_hist ON latest_1d (macd_hist);
+CREATE INDEX IF NOT EXISTS idx_latest_1d_volume ON latest_1d (volume);
+
+-- =============================================
+-- Live Quotes Cache Table
+-- =============================================
+-- Single-row-per-symbol cache for on-demand live data.
+-- Populated when a user views a stock; overwritten every polling cycle.
+-- NOT a hypertable — symbol is the sole PK, one row per ticker.
+
+CREATE TABLE IF NOT EXISTS live_quotes (
+    symbol VARCHAR(10) PRIMARY KEY,
+    -- OHLCV (today's aggregated)
+    open DECIMAL(15,4),
+    high DECIMAL(15,4),
+    low DECIMAL(15,4),
+    close DECIMAL(15,4),
+    volume BIGINT,
+    prev_close DECIMAL(15,4),
+    change DECIMAL(15,4),
+    change_pct DECIMAL(10,4),
+    -- SMA
+    sma5 DECIMAL(15,4),
+    sma10 DECIMAL(15,4),
+    sma20 DECIMAL(15,4),
+    sma30 DECIMAL(15,4),
+    sma60 DECIMAL(15,4),
+    sma120 DECIMAL(15,4),
+    sma250 DECIMAL(15,4),
+    -- EMA
+    ema5 DECIMAL(15,4),
+    ema10 DECIMAL(15,4),
+    ema20 DECIMAL(15,4),
+    ema30 DECIMAL(15,4),
+    ema60 DECIMAL(15,4),
+    ema120 DECIMAL(15,4),
+    ema250 DECIMAL(15,4),
+    -- WMA
+    wma5 DECIMAL(15,4),
+    wma10 DECIMAL(15,4),
+    wma20 DECIMAL(15,4),
+    wma30 DECIMAL(15,4),
+    wma60 DECIMAL(15,4),
+    wma120 DECIMAL(15,4),
+    wma250 DECIMAL(15,4),
+    -- DEMA
+    dema5 DECIMAL(15,4),
+    dema10 DECIMAL(15,4),
+    dema20 DECIMAL(15,4),
+    dema30 DECIMAL(15,4),
+    dema60 DECIMAL(15,4),
+    dema120 DECIMAL(15,4),
+    dema250 DECIMAL(15,4),
+    -- TEMA
+    tema5 DECIMAL(15,4),
+    tema10 DECIMAL(15,4),
+    tema20 DECIMAL(15,4),
+    tema30 DECIMAL(15,4),
+    tema60 DECIMAL(15,4),
+    tema120 DECIMAL(15,4),
+    tema250 DECIMAL(15,4),
+    -- KAMA
+    kama5 DECIMAL(15,4),
+    kama10 DECIMAL(15,4),
+    kama20 DECIMAL(15,4),
+    kama30 DECIMAL(15,4),
+    kama60 DECIMAL(15,4),
+    kama120 DECIMAL(15,4),
+    kama250 DECIMAL(15,4),
+    -- Bollinger Bands
+    bbands_upper DECIMAL(15,4),
+    bbands_lower DECIMAL(15,4),
+    -- MACD
+    macd DECIMAL(15,4),
+    macd_signal DECIMAL(15,4),
+    macd_hist DECIMAL(15,4),
+    -- RSI
+    rsi DECIMAL(15,4),
+    -- KDJ
+    k DECIMAL(15,4),
+    d DECIMAL(15,4),
+    j DECIMAL(15,4),
+    -- Previous day values (for cross detection)
+    prev_macd_hist DECIMAL(15,4),
+    prev_k DECIMAL(15,4),
+    prev_d DECIMAL(15,4),
+    -- Metadata
+    trading_date DATE,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_quotes_updated ON live_quotes (updated_at);
+
+-- =============================================
 -- Authentication and User Management Tables
 -- =============================================
 
 -- Create user status enum type
 DO $$ BEGIN
     CREATE TYPE user_status AS ENUM ('active', 'banned', 'suspended', 'paused');
+EXCEPTION
+    WHEN duplicate_object THEN null;
+END $$;
+
+-- Create user tier enum type (User System — see USER_SYSTEM_PLAN.md)
+DO $$ BEGIN
+    CREATE TYPE user_tier AS ENUM ('base', 'premium');
 EXCEPTION
     WHEN duplicate_object THEN null;
 END $$;
@@ -648,6 +762,11 @@ CREATE TABLE IF NOT EXISTS user_id_security (
     password_hash VARCHAR(255) NOT NULL,
     is_email_verified BOOLEAN DEFAULT FALSE,
     status user_status DEFAULT 'active',
+    tier user_tier NOT NULL DEFAULT 'base',
+    referral_code VARCHAR(12) UNIQUE,
+    referred_by UUID REFERENCES user_id_security(id) ON DELETE SET NULL,
+    last_login_at TIMESTAMPTZ,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -680,3 +799,93 @@ CREATE INDEX IF NOT EXISTS idx_email_verify_token ON email_verification_tokens(t
 CREATE INDEX IF NOT EXISTS idx_email_verify_user ON email_verification_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_password_reset_token ON password_reset_tokens(token);
 CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
+
+-- User monitoring list table
+CREATE TABLE IF NOT EXISTS user_monitor_list (
+    user_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    symbol VARCHAR(10) NOT NULL,
+    added_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, symbol)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_list_user ON user_monitor_list(user_id);
+
+-- =============================================
+-- User System: Matrix AI Credits, Referrals, Anon Usage
+-- (mirrors backend/migrations/001_user_system.sql — see USER_SYSTEM_PLAN.md)
+-- =============================================
+
+-- Credit wallet (1:1, fast balance cache; truth lives in credit_ledger)
+CREATE TABLE IF NOT EXISTS user_credits (
+    user_id UUID PRIMARY KEY REFERENCES user_id_security(id) ON DELETE CASCADE,
+    base_credits INT NOT NULL DEFAULT 100,                                  -- monthly refresh, no rollover
+    base_period DATE NOT NULL DEFAULT (date_trunc('month', (NOW() AT TIME ZONE 'US/Eastern')))::date,
+    boost_credits INT NOT NULL DEFAULT 0,                                   -- never expires
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Append-only ledger (audit trail + token analytics)
+CREATE TABLE IF NOT EXISTS credit_ledger (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    action VARCHAR(32) NOT NULL,        -- chat | screener | monthly_refresh | referral_bonus | welcome_bonus | purchase | admin_adjust
+    credits_delta INT NOT NULL,         -- negative = spend, positive = grant
+    bucket VARCHAR(8) NOT NULL,         -- base | boost
+    balance_after INT NOT NULL,
+    ref_type VARCHAR(32),
+    ref_id VARCHAR(64),
+    input_tokens INT,
+    output_tokens INT,
+    cost_usd NUMERIC(10,6),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_user_time ON credit_ledger(user_id, created_at DESC);
+
+-- Referrals (growth loop + fraud audit)
+CREATE TABLE IF NOT EXISTS referrals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    referrer_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    referred_user_id UUID UNIQUE NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    referral_code VARCHAR(12) NOT NULL,
+    status VARCHAR(12) NOT NULL DEFAULT 'pending',  -- pending | approved | rewarded | rejected
+    referrer_reward INT NOT NULL DEFAULT 100,
+    referee_reward INT NOT NULL DEFAULT 50,         -- double-sided welcome boost
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    approved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id);
+
+-- Subscriptions (PLACEHOLDER — no payment provider wired yet)
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    plan VARCHAR(16) NOT NULL DEFAULT 'premium',
+    status VARCHAR(16) NOT NULL DEFAULT 'inactive',  -- inactive | active | past_due | canceled
+    provider VARCHAR(16),
+    provider_ref VARCHAR(128),
+    current_period_start TIMESTAMPTZ,
+    current_period_end TIMESTAMPTZ,
+    started_at TIMESTAMPTZ,                           -- first time this user ever became premium
+    canceled_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_user ON subscriptions(user_id);
+
+-- Tier-change audit trail (tier on user_id_security is a fast cache; this is history)
+CREATE TABLE IF NOT EXISTS tier_changes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES user_id_security(id) ON DELETE CASCADE,
+    from_tier user_tier,
+    to_tier user_tier NOT NULL,
+    reason VARCHAR(32),          -- initial | upgrade | downgrade | lapse | admin
+    effective_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_tier_changes_user ON tier_changes(user_id, effective_at DESC);
+
+-- Anonymous AI usage (durable lifetime per-IP cap; raw IP never stored)
+CREATE TABLE IF NOT EXISTS anon_ai_usage (
+    ip_hash CHAR(64) PRIMARY KEY,       -- sha256(ip + server_salt)
+    count INT NOT NULL DEFAULT 0,
+    first_seen TIMESTAMPTZ DEFAULT NOW(),
+    last_seen TIMESTAMPTZ DEFAULT NOW()
+);

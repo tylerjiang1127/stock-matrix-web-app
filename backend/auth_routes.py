@@ -2,7 +2,7 @@
 Authentication routes for user registration, login, verification, and password reset
 """
 
-from fastapi import APIRouter, HTTPException, Response, Cookie, Depends
+from fastapi import APIRouter, HTTPException, Response, Cookie, Depends, Request
 from pydantic import BaseModel, EmailStr
 from typing import Optional
 from datetime import datetime
@@ -21,6 +21,8 @@ from email_service import email_service
 from postgres_models import UserRepository, TokenRepository
 from redis_database import session_manager
 from postgres_database import postgres_db
+from credits_service import CreditsService
+from referral_service import ReferralService
 
 # Create router
 auth_router = APIRouter()
@@ -28,6 +30,8 @@ auth_router = APIRouter()
 # Initialize repositories
 user_repo = UserRepository(postgres_db)
 token_repo = TokenRepository(postgres_db)
+credits_service = CreditsService(postgres_db)
+referral_service = ReferralService(postgres_db, credits_service)
 
 
 # Request/Response Models
@@ -36,6 +40,7 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     password_confirm: str
+    referral_code: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -81,7 +86,7 @@ async def get_current_user(session_id: Optional[str] = Cookie(None)) -> Optional
 # ==================== REGISTRATION ====================
 
 @auth_router.post("/register")
-async def register(request: RegisterRequest):
+async def register(request: RegisterRequest, http_request: Request):
     """
     Register a new user
     
@@ -124,12 +129,30 @@ async def register(request: RegisterRequest):
         if request.password != request.password_confirm:
             raise HTTPException(status_code=400, detail="Passwords do not match")
         
-        # 6. Hash password and create user
+        # 6. Resolve an optional referral code → referrer (ignore invalid codes silently)
+        referrer_id = None
+        if request.referral_code:
+            referrer = await user_repo.get_user_by_referral_code(request.referral_code.strip().upper())
+            if referrer:
+                referrer_id = str(referrer['id'])
+
+        # 7. Hash password and create user (with generated referral code + referred_by)
         password_hash = hash_password(request.password)
-        user_id = await user_repo.create_user(request.email, request.username, password_hash)
-        
+        user_id = await user_repo.create_user(
+            request.email, request.username, password_hash, referred_by=referrer_id
+        )
+
         if not user_id:
             raise HTTPException(status_code=500, detail="Failed to create user account")
+
+        # 7b. Record a pending referral (rewarded on email verification)
+        if referrer_id:
+            await referral_service.record_referral(referrer_id, user_id, request.referral_code.strip().upper())
+
+        # 7c. Activity: signup
+        activity = getattr(http_request.app.state, "activity_service", None)
+        if activity:
+            await activity.log("signup", user_id=user_id, props={"referred": bool(referrer_id)})
         
         # 7. Generate verification token (permanent - 10 years expiry)
         token = generate_verification_token()
@@ -207,7 +230,11 @@ async def verify_email(token: str, response: Response):
         
         # 4. Mark token as used
         await token_repo.mark_verification_token_used(token)
-        
+
+        # 4b. Approve any pending referral now that the email is verified
+        #     (grants referrer +100 / referee +50 boost credits — double-sided, LOCKED §8)
+        await referral_service.approve_on_verify(user_id)
+
         # 5. Create session and auto-login the user
         session_id = await session_manager.create_session(user_id, {
             'username': token_data['username'],
@@ -310,7 +337,7 @@ async def resend_verification_email(request: ResendVerificationRequest):
 # ==================== LOGIN ====================
 
 @auth_router.post("/login")
-async def login(request: LoginRequest, response: Response):
+async def login(request: LoginRequest, response: Response, http_request: Request):
     """
     User login
     
@@ -369,7 +396,13 @@ async def login(request: LoginRequest, response: Response):
             'username': user['username'],
             'email': user['email']
         })
-        
+
+        # 5b. Stamp last login (profile / activity)
+        await user_repo.update_last_login(user_id)
+        activity = getattr(http_request.app.state, "activity_service", None)
+        if activity:
+            await activity.log("login", user_id=user_id)
+
         # 6. Set HTTP-only secure cookie
         response.set_cookie(
             key="session_id",

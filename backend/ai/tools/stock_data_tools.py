@@ -260,8 +260,43 @@ class ToolRegistry:
                 result["moving_averages"][f"{prefix.upper()}{p}"] = _clean(val)
         return result
 
+    async def _get_overview_from_mongo(self, symbol: str) -> Optional[Dict]:
+        if not self.metadata_repo:
+            return None
+        meta = await self.metadata_repo.get_stock_metadata(symbol)
+        if not meta or "company_overview" not in meta:
+            return None
+        co = meta["company_overview"]
+        if not co.get("sector") and not co.get("Sector"):
+            return None
+        return {
+            "Name": co.get("longName") or co.get("Name"),
+            "Symbol": co.get("symbol") or co.get("Symbol") or symbol,
+            "Sector": co.get("sector") or co.get("Sector"),
+            "Industry": co.get("industry") or co.get("Industry"),
+            "MarketCapitalization": co.get("marketCap") or co.get("MarketCapitalization"),
+            "PERatio": co.get("peRatio") or co.get("PERatio"),
+            "ForwardPE": co.get("forwardPE") or co.get("ForwardPE"),
+            "PEGRatio": co.get("pegRatio") or co.get("PEGRatio"),
+            "EPS": co.get("eps") or co.get("EPS"),
+            "DividendYield": co.get("dividendYield") or co.get("DividendYield"),
+            "BookValue": co.get("bookValue") or co.get("BookValue"),
+            "ReturnOnEquityTTM": co.get("returnOnEquityTTM") or co.get("ReturnOnEquityTTM"),
+            "ReturnOnAssetsTTM": co.get("returnOnAssetsTTM") or co.get("ReturnOnAssetsTTM"),
+            "ProfitMargin": co.get("profitMargin") or co.get("ProfitMargin"),
+            "Beta": co.get("beta") or co.get("Beta"),
+            "52WeekHigh": co.get("52WeekHigh"),
+            "52WeekLow": co.get("52WeekLow"),
+            "50DayMovingAverage": co.get("50DayMovingAverage"),
+            "200DayMovingAverage": co.get("200DayMovingAverage"),
+            "Description": co.get("longBusinessSummary") or co.get("Description"),
+        }
+
     async def get_company_overview(self, symbol: str) -> Dict:
         symbol = symbol.upper()
+        result = await self._get_overview_from_mongo(symbol)
+        if result:
+            return {k: v for k, v in result.items() if v is not None}
         if self.dsm:
             overview_result = await self.dsm.fetch_company_overview(symbol)
             if overview_result.success and overview_result.data:
@@ -272,10 +307,6 @@ class ToolRegistry:
                         "ProfitMargin", "Beta", "52WeekHigh", "52WeekLow",
                         "50DayMovingAverage", "200DayMovingAverage", "Description"]
                 return {k: data.get(k) for k in keys if data.get(k) is not None}
-        if self.metadata_repo:
-            meta = await self.metadata_repo.get_stock_metadata(symbol)
-            if meta and "company_overview" in meta:
-                return meta["company_overview"]
         return {"error": f"No company data found for {symbol}"}
 
     async def get_financial_statements(self, symbol: str, statement: str = "income_statement",
@@ -301,24 +332,39 @@ class ToolRegistry:
 
     async def get_news_sentiment(self, symbol: str) -> Dict:
         symbol = symbol.upper()
-        if not self.dsm:
-            return {"error": "News data not available"}
-        result = await self.dsm.fetch_news_sentiment(symbol)
-        if not result.success:
-            return {"error": f"Could not fetch news for {symbol}"}
-        data = result.data
-        articles = data.get("articles", [])[:5]
-        return {
-            "symbol": symbol,
-            "average_sentiment": data.get("average_sentiment_score", 0),
-            "sentiment_label": data.get("average_sentiment_label", "Neutral"),
-            "total_articles": data.get("total_articles", 0),
-            "recent_articles": [
-                {"title": a.get("title", ""), "sentiment": a.get("overall_sentiment_label", ""),
-                 "score": a.get("overall_sentiment_score", 0), "source": a.get("source", "")}
-                for a in articles
-            ],
-        }
+        if self.metadata_repo:
+            meta = await self.metadata_repo.get_stock_metadata(symbol)
+            if meta and meta.get("news_sentiment"):
+                data = meta["news_sentiment"]
+                articles = data.get("articles", [])[:5]
+                return {
+                    "symbol": symbol,
+                    "average_sentiment": data.get("average_sentiment_score", 0),
+                    "sentiment_label": data.get("average_sentiment_label", "Neutral"),
+                    "total_articles": data.get("total_articles", 0),
+                    "recent_articles": [
+                        {"title": a.get("title", ""), "sentiment": a.get("sentiment_label", ""),
+                         "score": a.get("sentiment_score", 0), "source": a.get("source", "")}
+                        for a in articles
+                    ],
+                }
+        if self.dsm:
+            result = await self.dsm.fetch_news_sentiment(symbol)
+            if result.success:
+                data = result.data
+                articles = data.get("articles", [])[:5]
+                return {
+                    "symbol": symbol,
+                    "average_sentiment": data.get("average_sentiment_score", 0),
+                    "sentiment_label": data.get("average_sentiment_label", "Neutral"),
+                    "total_articles": data.get("total_articles", 0),
+                    "recent_articles": [
+                        {"title": a.get("title", ""), "sentiment": a.get("overall_sentiment_label", ""),
+                         "score": a.get("overall_sentiment_score", 0), "source": a.get("source", "")}
+                        for a in articles
+                    ],
+                }
+        return {"error": f"No news data found for {symbol}"}
 
     async def get_market_summary(self) -> Dict:
         breadth = await self.pg_repo.get_market_breadth()
@@ -348,11 +394,7 @@ class ToolRegistry:
             latest, prev = rows[0], rows[1]
             change_pct = round((float(latest["close"]) - float(prev["close"])) / float(prev["close"]) * 100, 2)
 
-            overview = {}
-            if self.dsm:
-                ov_result = await self.dsm.fetch_company_overview(sym)
-                if ov_result.success:
-                    overview = ov_result.data or {}
+            overview = await self._get_overview_from_mongo(sym) or {}
 
             comparisons.append(_clean({
                 "symbol": sym,

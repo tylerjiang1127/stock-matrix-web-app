@@ -939,6 +939,21 @@
 /* News article card styles are inline in component */
 
 /* ===== Real-time Badge ===== */
+.live-price-display {
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    font-family: 'Courier New', monospace;
+}
+.live-price-display.blinking {
+    animation: price-blink 1.5s ease-in-out infinite;
+}
+
+@keyframes price-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
 .realtime-badge {
     font-size: 10px;
     font-weight: 700;
@@ -989,5 +1004,156 @@
 
     .trend-chart-container {
         height: 180px;
+    }
+}
+
+/* =============================================
+   Monitoring List Cards
+   ============================================= */
+
+.monitor-card {
+    border-left: 3px solid #888;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.02);
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s, box-shadow 0.2s;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    border-left-width: 3px;
+}
+
+.monitor-card:hover {
+    background: rgba(77, 171, 247, 0.06);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.monitor-card-active {
+    background: rgba(77, 171, 247, 0.1);
+    border-color: rgba(77, 171, 247, 0.3);
+    border-left-width: 3px;
+}
+
+.monitor-card-remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: none;
+    border: none;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 3px;
+    transition: color 0.2s, background 0.2s;
+}
+
+.monitor-card-remove:hover {
+    color: #ef5350;
+    background: rgba(239, 83, 80, 0.1);
+}
+
+.monitor-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+    padding-right: 16px;
+}
+
+.monitor-card-symbol {
+    font-weight: 700;
+    font-size: 13px;
+    color: #333;
+}
+
+.monitor-card-price {
+    text-align: right;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #333;
+}
+
+.monitor-card-price span:last-child {
+    font-size: 11px;
+}
+
+.monitor-price-live {
+    animation: monitor-price-pulse 2s ease-in-out infinite;
+}
+
+@keyframes monitor-price-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.monitor-card-indicators {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.indicator-pill {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.04);
+    white-space: nowrap;
+}
+
+/* Add to monitor button */
+.monitor-add-btn {
+    background: none;
+    border: 1.5px solid rgba(255, 255, 255, 0.5);
+    color: white;
+    border-radius: 4px;
+    width: 26px;
+    height: 26px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+    padding: 0;
+    transition: all 0.2s;
+    animation: monitor-btn-blink 1.2s ease-in-out infinite;
+}
+
+.monitor-add-btn:hover:not(:disabled) {
+    border-color: #4dabf7;
+    color: #4dabf7;
+    background: rgba(77, 171, 247, 0.15);
+}
+
+.monitor-add-btn:disabled {
+    animation: none;
+    cursor: default;
+}
+
+.monitor-add-btn.monitor-added {
+    animation: none;
+    color: #26a69a;
+    border-color: #26a69a;
+    opacity: 0.8;
+}
+
+@keyframes monitor-btn-blink {
+    0%, 100% { opacity: 1; box-shadow: 0 0 4px rgba(255, 255, 255, 0.3); }
+    50% { opacity: 0.5; box-shadow: none; }
+}
+
+/* Responsive: disable sticky on mobile */
+@media (max-width: 1024px) {
+    .info-column .chart-section {
+        position: static;
+        max-height: none;
     }
 }
