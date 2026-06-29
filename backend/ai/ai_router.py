@@ -194,14 +194,22 @@ async def chat(body: ChatRequest, request: Request):
 
 
 @ai_router.get("/chat/conversations")
-async def list_conversations(request: Request, user_id: str = "anonymous", limit: int = 20):
+async def list_conversations(request: Request, limit: int = 20):
     conv_repo = getattr(request.app.state, "ai_conversation_repo", None)
     if not conv_repo:
         return {"conversations": []}
+    user_id = await _resolve_user_id(request) or "anonymous"
     convs = await conv_repo.list_conversations(user_id=user_id, limit=limit)
     for c in convs:
         if "updated_at" in c:
             c["updated_at"] = c["updated_at"].isoformat()
+        # Fall back to first user message if no explicit title stored yet
+        if not c.get("title") and c.get("messages"):
+            first_text = next(
+                (m.get("content", "") for m in c["messages"] if m.get("role") == "user"), ""
+            )
+            c["title"] = (first_text[:40] + "…") if len(first_text) > 40 else first_text or "Chat"
+        c.pop("messages", None)
     return {"conversations": convs}
 
 
@@ -214,6 +222,21 @@ async def get_conversation(conversation_id: str, request: Request):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conv
+
+
+class UpdateTitleRequest(BaseModel):
+    title: str
+
+
+@ai_router.patch("/chat/conversations/{conversation_id}/title")
+async def update_conversation_title(conversation_id: str, body: UpdateTitleRequest, request: Request):
+    conv_repo = getattr(request.app.state, "ai_conversation_repo", None)
+    if not conv_repo:
+        raise HTTPException(status_code=503, detail="Chat not configured")
+    ok = await conv_repo.set_title(conversation_id, body.title.strip()[:60])
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"status": "ok"}
 
 
 @ai_router.delete("/chat/conversations/{conversation_id}")

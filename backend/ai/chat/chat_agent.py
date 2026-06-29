@@ -45,6 +45,11 @@ class ChatAgent:
 
         yield {"type": "conversation_id", "conversation_id": conversation_id}
 
+        # Each "text" event is the cumulative response so far (not a delta).
+        # Only the last one has the complete text — appending on every chunk
+        # would store dozens of duplicate partial messages in MongoDB.
+        last_assistant_text = ""
+
         async for event in self.ai_client.stream_tool_loop(
             messages=messages,
             tools=TOOLS,
@@ -54,10 +59,15 @@ class ChatAgent:
             yield event
 
             if event["type"] == "text":
-                messages.append({"role": "assistant", "content": event["content"]})
+                last_assistant_text = event["content"]
+
+        if last_assistant_text:
+            messages.append({"role": "assistant", "content": last_assistant_text})
 
         storable = self._strip_for_storage(messages)
-        await self.conversation_repo.save_conversation(conversation_id, user_id, storable)
+        first_user = next((m.get("content", "") for m in storable if m.get("role") == "user"), "")
+        title = (first_user[:40] + "…") if len(first_user) > 40 else first_user or None
+        await self.conversation_repo.save_conversation(conversation_id, user_id, storable, title=title)
 
     @staticmethod
     def _strip_for_storage(messages: List[Dict]) -> List[Dict]:
@@ -86,5 +96,13 @@ class ChatAgent:
                     content = content[:10000] + "...(truncated)"
                 if content:
                     entry["content"] = content
-            stripped.append(entry)
+
+            # Collapse consecutive assistant messages (streaming-chunk duplicates).
+            # Keep the entry with the most content.
+            if stripped and stripped[-1].get("role") == "assistant" == role:
+                prev_len = len(stripped[-1].get("content", ""))
+                if len(entry.get("content", "")) > prev_len:
+                    stripped[-1] = entry
+            else:
+                stripped.append(entry)
         return stripped

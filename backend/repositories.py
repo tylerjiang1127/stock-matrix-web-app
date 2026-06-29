@@ -320,7 +320,10 @@ class AIConversationRepository:
         await self.collection.create_index([("user_id", 1), ("updated_at", -1)])
 
     async def save_conversation(self, conversation_id: str, user_id: str,
-                                 messages: List[Dict]) -> None:
+                                 messages: List[Dict], title: Optional[str] = None) -> None:
+        on_insert: Dict[str, Any] = {"created_at": datetime.now(_ET)}
+        if title:
+            on_insert["title"] = title
         await self.collection.update_one(
             {"conversation_id": conversation_id},
             {
@@ -329,10 +332,17 @@ class AIConversationRepository:
                     "messages": messages,
                     "updated_at": datetime.now(_ET),
                 },
-                "$setOnInsert": {"created_at": datetime.now(_ET)},
+                "$setOnInsert": on_insert,
             },
             upsert=True,
         )
+
+    async def set_title(self, conversation_id: str, title: str) -> bool:
+        result = await self.collection.update_one(
+            {"conversation_id": conversation_id},
+            {"$set": {"title": title, "updated_at": datetime.now(_ET)}},
+        )
+        return result.modified_count > 0
 
     async def get_conversation(self, conversation_id: str) -> Optional[Dict]:
         return await self.collection.find_one(
@@ -342,7 +352,7 @@ class AIConversationRepository:
     async def list_conversations(self, user_id: str, limit: int = 20) -> List[Dict]:
         cursor = self.collection.find(
             {"user_id": user_id},
-            {"_id": 0, "conversation_id": 1, "updated_at": 1,
+            {"_id": 0, "conversation_id": 1, "title": 1, "updated_at": 1,
              "messages": {"$slice": 1}},
         ).sort("updated_at", -1).limit(limit)
         return await cursor.to_list(length=limit)
