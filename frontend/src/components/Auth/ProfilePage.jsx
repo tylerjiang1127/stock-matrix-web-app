@@ -151,7 +151,7 @@ function ProfilePage() {
                     </div>
                     {user.tier === 'base' && (
                         <div className="profile-upgrade-note">
-                            Premium unlocks 500 monthly credits. <span className="muted">(coming soon)</span>
+                            Premium unlocks 300 monthly credits. <span className="muted">(coming soon)</span>
                         </div>
                     )}
                     {user.is_admin && (

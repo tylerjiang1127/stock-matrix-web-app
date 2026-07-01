@@ -46,6 +46,7 @@ class SpendResult:
     cost: int
     base_credits: int   # balance after
     boost_credits: int  # balance after
+    tier: Optional[str] = None  # spender's tier (for AI priority, etc.)
 
     @property
     def total(self) -> int:
@@ -181,7 +182,8 @@ class CreditsService:
                     conn, uid, -base_spent, -boost_spent, action,
                     ref_type, ref_id, input_tokens, output_tokens, cost_usd,
                 )
-                return SpendResult(base_spent, boost_spent, cost, new_base, new_boost)
+                return SpendResult(base_spent, boost_spent, cost, new_base, new_boost,
+                                   tier=row["tier"])
 
     async def refund(self, user_id, spend_result: SpendResult,
                      reason: str = "refund",

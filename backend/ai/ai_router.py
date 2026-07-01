@@ -8,6 +8,18 @@ from typing import Optional, List, Dict, Any, Callable, Awaitable
 from entitlements import action_cost
 from credits_service import InsufficientCredits
 from redis_database import session_manager
+from ai.priority_gate import (
+    ai_priority_var, PRIORITY_PREMIUM, PRIORITY_BASE, PRIORITY_ANON,
+)
+
+
+def _priority_for_tier(tier: Optional[str]) -> int:
+    """Map a user's tier to an AI scheduling priority (lower = served first)."""
+    if tier == "premium":
+        return PRIORITY_PREMIUM
+    if tier:
+        return PRIORITY_BASE
+    return PRIORITY_ANON  # anonymous / unknown
 
 ai_router = APIRouter()
 
@@ -36,8 +48,10 @@ class QuotaContext:
     the reservation — a credit refund for users, a usage decrement for anonymous IPs —
     and is called when the AI call produces no output.
     """
-    def __init__(self, user_id: Optional[str], refund: Optional[Callable[[], Awaitable[None]]] = None):
+    def __init__(self, user_id: Optional[str], refund: Optional[Callable[[], Awaitable[None]]] = None,
+                 priority: int = PRIORITY_ANON):
         self.user_id = user_id
+        self.priority = priority
         self._refund = refund
 
     async def refund(self) -> None:
@@ -67,7 +81,7 @@ async def acquire_ai_quota(request: Request, action: str) -> QuotaContext:
         async def _refund():
             await credits.refund(user_id, res, reason=f"{action}_refund")
 
-        return QuotaContext(user_id, _refund)
+        return QuotaContext(user_id, _refund, priority=_priority_for_tier(res.tier))
 
     if not user_id and anon:
         ip = _client_ip(request)
@@ -81,9 +95,10 @@ async def acquire_ai_quota(request: Request, action: str) -> QuotaContext:
         async def _refund():
             await anon.release(ip)
 
-        return QuotaContext(None, _refund)
+        return QuotaContext(None, _refund, priority=PRIORITY_ANON)
 
-    return QuotaContext(user_id)
+    # No metering services configured: authed users still rank above anonymous.
+    return QuotaContext(user_id, priority=_priority_for_tier("base" if user_id else None))
 
 
 # ── Request / Response Models ──────────────────────────
@@ -171,6 +186,10 @@ async def chat(body: ChatRequest, request: Request):
                            props={"chars": len(body.message)})
 
     async def event_stream():
+        # Set priority in the context that actually drives the nested streaming
+        # generators (chat_agent → stream_tool_loop → Deepseek), so premium users'
+        # rounds are admitted first when the concurrency gate is saturated.
+        ai_priority_var.set(quota.priority)
         produced = False
         try:
             async for event in chat_agent.handle_message(
@@ -260,6 +279,8 @@ async def screen_stocks(body: ScreenerRequest, request: Request):
 
     # Reserve quota up front. Anon IPs are not refunded on failure (hard gate).
     quota = await acquire_ai_quota(request, "screener")
+    # Premium users' Deepseek calls jump the concurrency gate when it's saturated.
+    ai_priority_var.set(quota.priority)
 
     try:
         result = await screener.screen(query=body.query, limit=min(body.limit, 50))

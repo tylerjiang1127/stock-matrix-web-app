@@ -818,7 +818,7 @@ CREATE INDEX IF NOT EXISTS idx_monitor_list_user ON user_monitor_list(user_id);
 -- Credit wallet (1:1, fast balance cache; truth lives in credit_ledger)
 CREATE TABLE IF NOT EXISTS user_credits (
     user_id UUID PRIMARY KEY REFERENCES user_id_security(id) ON DELETE CASCADE,
-    base_credits INT NOT NULL DEFAULT 100,                                  -- monthly refresh, no rollover
+    base_credits INT NOT NULL DEFAULT 50,                                   -- monthly refresh, no rollover (base tier allotment)
     base_period DATE NOT NULL DEFAULT (date_trunc('month', (NOW() AT TIME ZONE 'US/Eastern')))::date,
     boost_credits INT NOT NULL DEFAULT 0,                                   -- never expires
     updated_at TIMESTAMPTZ DEFAULT NOW()
