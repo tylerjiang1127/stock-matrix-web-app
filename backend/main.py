@@ -163,6 +163,7 @@ async def startup_data_sources():
         ai_client = DeepseekClient(
             api_key=deepseek_key,
             model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+            max_concurrency=int(os.getenv("AI_MAX_CONCURRENCY", "8")),
         )
         app.state.ai_client = ai_client
 
@@ -785,12 +786,20 @@ async def get_stock_info(symbol: str):
         async def get_overview():
             cached = existing_metadata.get('company_overview')
             if cached and cached.get('longName'):
-                return cached
+                # Validate the cached entry belongs to this symbol.
+                # A mismatch means the MongoDB document has stale/corrupt data
+                # (e.g. company_overview from a previous ticker stored under the
+                # wrong key). Re-fetch in that case rather than returning wrong info.
+                cached_sym = (cached.get('Symbol') or cached.get('symbol') or '').upper()
+                if not cached_sym or cached_sym == symbol.upper():
+                    return cached
+                # Symbol mismatch — evict and refetch
+                existing_metadata.pop('company_overview', None)
             result = await dsm.fetch_company_overview(symbol)
             if result.success and result.data:
                 existing_metadata['company_overview'] = result.data
                 return result.data
-            return cached or {'symbol': symbol}
+            return existing_metadata.get('company_overview') or {'symbol': symbol}
 
         async def get_news():
             cached = existing_metadata.get('news_sentiment')
@@ -829,7 +838,7 @@ async def get_stock_info(symbol: str):
                         else:
                             need_fetch = True
                             last_date = None
-                        if last_date and (datetime.now(_ET) - last_date.replace(tzinfo=None)).days > 100:
+                        if last_date and (datetime.now(_ET).replace(tzinfo=None) - last_date.replace(tzinfo=None)).days > 100:
                             need_fetch = True
                     else:
                         need_fetch = True
@@ -865,6 +874,14 @@ async def get_stock_info(symbol: str):
             metadata_repo.create_or_update_stock_metadata(symbol, existing_metadata)
         )
 
+        def _sanitize_rows(rows):
+            """Replace NaN/Inf floats with None — JSON does not allow them."""
+            return [
+                {k: None if isinstance(v, float) and (v != v or v == float('inf') or v == float('-inf')) else v
+                 for k, v in row.items()}
+                for row in rows
+            ]
+
         # Format fundamentals for frontend
         formatted_fundamental = {}
         for period in ['annual', 'quarterly']:
@@ -875,7 +892,7 @@ async def get_stock_info(symbol: str):
                     if isinstance(statement_data, pd.DataFrame):
                         if not statement_data.empty:
                             try:
-                                records = statement_data.to_dict('records')
+                                records = _sanitize_rows(statement_data.to_dict('records'))
                                 formatted_fundamental[period][statement_type] = {
                                     'data': records,
                                     'columns': statement_data.columns.tolist(),
@@ -886,7 +903,11 @@ async def get_stock_info(symbol: str):
                         else:
                             formatted_fundamental[period][statement_type] = {}
                     elif isinstance(statement_data, dict) and 'data' in statement_data:
-                        formatted_fundamental[period][statement_type] = statement_data
+                        # MongoDB-cached dict: also sanitize NaN from stored records
+                        formatted_fundamental[period][statement_type] = {
+                            **statement_data,
+                            'data': _sanitize_rows(statement_data.get('data', [])),
+                        }
                     else:
                         formatted_fundamental[period][statement_type] = {}
 

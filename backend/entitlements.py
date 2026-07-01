@@ -19,11 +19,11 @@ ENTITLEMENTS = {
     },
     "base": {
         "monitor_max": 10,
-        "ai_monthly_credits": 100,
+        "ai_monthly_credits": 50,
     },
     "premium": {
         "monitor_max": 20,
-        "ai_monthly_credits": 500,
+        "ai_monthly_credits": 300,
     },
 }
 

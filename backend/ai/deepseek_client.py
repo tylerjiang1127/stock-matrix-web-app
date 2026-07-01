@@ -6,6 +6,8 @@ from typing import Dict, List, Any, Optional, AsyncGenerator, Callable
 
 import httpx
 
+from ai.priority_gate import PriorityGate, ai_priority_var
+
 _DSML_RE = re.compile(r'<[\s|｜]*(?:DSML|/?tool_calls|/?invoke|/?parameter).*', re.DOTALL)
 
 logger = logging.getLogger(__name__)
@@ -22,12 +24,15 @@ class DeepseekClient:
         base_url: str = None,
         max_retries: int = 3,
         timeout: float = 120.0,
+        max_concurrency: int = 8,
     ):
         self.api_key = api_key
         self.model = model
         self.base_url = (base_url or self.BASE_URL).rstrip("/")
         self.max_retries = max_retries
         self.timeout = timeout
+        # Caps concurrent upstream calls; premium requests jump the queue when saturated.
+        self._gate = PriorityGate(max_concurrency)
         self._client = httpx.AsyncClient(
             base_url=self.base_url,
             headers={
@@ -74,45 +79,53 @@ class DeepseekClient:
 
     async def _request_with_retry(self, payload: Dict) -> Dict:
         last_error = None
-        for attempt in range(self.max_retries):
-            try:
-                resp = await self._client.post("/chat/completions", json=payload)
-                if resp.status_code == 429 or resp.status_code >= 500:
-                    wait = min(2 ** attempt * 2, 30)
-                    logger.warning(
-                        "Deepseek %s (attempt %d/%d), retrying in %ds",
-                        resp.status_code, attempt + 1, self.max_retries, wait,
-                    )
-                    await asyncio.sleep(wait)
-                    last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-                    continue
-                resp.raise_for_status()
-                data = resp.json()
-                self._track_usage(data)
-                return data
-            except httpx.TimeoutException:
-                last_error = "Request timed out"
-                if attempt < self.max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)
-            except httpx.HTTPStatusError as e:
-                raise RuntimeError(f"Deepseek API error: {e.response.status_code} {e.response.text[:300]}") from e
+        # Hold a concurrency slot for the whole call (incl. retries); premium first.
+        async with self._gate.slot(ai_priority_var.get()):
+            for attempt in range(self.max_retries):
+                try:
+                    resp = await self._client.post("/chat/completions", json=payload)
+                    if resp.status_code == 429 or resp.status_code >= 500:
+                        wait = min(2 ** attempt * 2, 30)
+                        logger.warning(
+                            "Deepseek %s (attempt %d/%d), retrying in %ds",
+                            resp.status_code, attempt + 1, self.max_retries, wait,
+                        )
+                        await asyncio.sleep(wait)
+                        last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    self._track_usage(data)
+                    return data
+                except httpx.TimeoutException:
+                    last_error = "Request timed out"
+                    if attempt < self.max_retries - 1:
+                        await asyncio.sleep(2 ** attempt)
+                except httpx.HTTPStatusError as e:
+                    raise RuntimeError(f"Deepseek API error: {e.response.status_code} {e.response.text[:300]}") from e
         raise RuntimeError(f"Deepseek API failed after {self.max_retries} attempts: {last_error}")
 
     async def _stream_completion(self, payload: Dict) -> AsyncGenerator[Dict, None]:
-        async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    return
-                try:
-                    chunk = json.loads(data_str)
-                    self._track_usage(chunk)
-                    yield chunk
-                except json.JSONDecodeError:
-                    continue
+        # Hold a concurrency slot for the whole streamed round (Deepseek is actively
+        # generating the entire time); premium waiters are admitted first when saturated.
+        await self._gate.acquire(ai_priority_var.get())
+        try:
+            async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        return
+                    try:
+                        chunk = json.loads(data_str)
+                        self._track_usage(chunk)
+                        yield chunk
+                    except json.JSONDecodeError:
+                        continue
+        finally:
+            await self._gate.release()
 
     # ── Tool-calling loop ──────────────────────────────────
 
@@ -288,4 +301,5 @@ class DeepseekClient:
                 + self.total_output_tokens * 1.10 / 1_000_000,
                 4,
             ),
+            "concurrency": self._gate.stats(),
         }

@@ -14,7 +14,7 @@ export function interpretQuota(detail) {
                 reason: 'anon_limit',
                 canRegister: true,
                 message: `You've reached the free usage limit for Matrix AI. `
-                    + `Create a free account to unlock 100 monthly AI credits and continue exploring with full AI-powered insights.`,
+                    + `Create a free account to unlock 50 monthly AI credits and continue exploring with full AI-powered insights.`,
             };
         }
         if (detail.reason === 'insufficient_credits') {

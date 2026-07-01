@@ -6,7 +6,7 @@ Tier switching (base <-> premium) with the credit + audit behavior locked in §2
 - Upgrade → premium: credits base is set to the premium allotment immediately (they
   paid), a subscription row goes active.
 - Downgrade → base: current month's credits are KEPT (no claw-back); the next lazy
-  monthly refresh naturally drops base to 100. Boost is always untouched.
+  monthly refresh naturally drops base to the base allotment. Boost is always untouched.
 
 Payment is still a placeholder — tier is flipped by the admin endpoint for now.
 """
@@ -66,7 +66,7 @@ class TierService:
 
         # 2. Credit side (separate txn; CreditsService manages its own locking).
         #    Upgrade → grant the premium allotment now. Downgrade → keep current month's
-        #    credits; the next lazy refresh (now tier=base) drops base to 100.
+        #    credits; the next lazy refresh (now tier=base) drops base to the base allotment.
         if new_tier == "premium":
             await self.credits.set_base_allotment(user_id, "premium", action="tier_upgrade")
 

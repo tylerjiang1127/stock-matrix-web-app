@@ -584,6 +584,7 @@ const StockChart = () => {
     const isBackfillRef = useRef(false);
     const savedRangeRef = useRef(null);
     const fullHistoryLoadedRef = useRef(false);
+    const infoFetchTickerRef = useRef(null); // tracks which ticker the latest /info request was for
     const lazyFetchParamsRef = useRef(null); // stores {chartUrl, chartBody} for on-demand history fetch
     const lastRenderedKeyRef = useRef(null); // tracks ticker-interval to gate fitContent
     const lastCandlestickDataRef = useRef(null); // tracks candlestick_data reference to skip /info re-renders
@@ -1315,8 +1316,27 @@ const StockChart = () => {
         // Info data — overview + news + fundamentals, renders panels when ready
         // Only fetch on global (ticker change), not on interval/MA/tech changes
         if (loadingScope === 'global') {
+            // Immediately wipe stale company/fundamental data from the previous ticker
+            // so it never bleeds into the new search while /info is in-flight.
+            setStockData(prev => ({
+                ...prev,
+                company_info: null,
+                news_sentiment: null,
+                fundamental_data: null,
+            }));
+
+            // Record which ticker this /info request belongs to.
+            // A ref update is synchronous, so when the .then() fires we can
+            // compare against the LATEST ticker rather than reading stale state
+            // from prev.chart_config (which may still hold the previous ticker
+            // if Phase 1 hasn't committed yet).
+            infoFetchTickerRef.current = params.ticker;
+            const infoTicker = params.ticker;
+
             axios.get('http://localhost:8000/api/stocks/' + params.ticker + '/info')
                 .then(res => {
+                    // Discard if the user started a newer search while this was in-flight.
+                    if (infoFetchTickerRef.current !== infoTicker) return;
                     setStockData(prev => ({ ...prev, ...res.data }));
                 })
                 .catch(() => {})
@@ -1376,12 +1396,20 @@ const StockChart = () => {
         if (liveQuoteDataRef.current && candlestickSeries.current) {
             applyLiveQuote(liveQuoteDataRef.current);
             // After live candle is added, re-fit so it's visible (first render only).
-            // updateCharts() calls fitContent() before the live candle exists,
-            // so we need one more fitContent() now that the candle is in the series.
+            // Re-apply the same 3-month default instead of fitContent(), which would
+            // zoom out to show all data (~1 year) and override our default view.
             if (isFirstRender && priceChart.current) {
-                [priceChart.current, volumeChart.current, technicalChart.current].forEach(c => {
-                    if (c) try { c.timeScale().fitContent(); } catch (_) {}
-                });
+                const interval = chartConfigRef.current.interval;
+                if (interval === '1d' || interval === '1wk') {
+                    const now = Math.floor(Date.now() / 1000);
+                    [priceChart.current, volumeChart.current, technicalChart.current].forEach(c => {
+                        if (c) try { c.timeScale().setVisibleRange({ from: now - 90 * 86400, to: now }); } catch (_) {}
+                    });
+                } else {
+                    [priceChart.current, volumeChart.current, technicalChart.current].forEach(c => {
+                        if (c) try { c.timeScale().fitContent(); } catch (_) {}
+                    });
+                }
             }
         }
 
@@ -2804,7 +2832,19 @@ useEffect(() => {
                 const isNewChart = lastRenderedKeyRef.current !== renderKey;
                 if (!isBackfillRef.current && isNewChart) {
                     lastRenderedKeyRef.current = renderKey;
-                    priceChart.current.timeScale().fitContent();
+                    const ts = priceChart.current.timeScale();
+                    const interval = chartConfigRef.current.interval;
+                    // Default to 3-month view for daily/weekly charts; fitContent for intraday
+                    if (interval === '1d' || interval === '1wk') {
+                        const now = Math.floor(Date.now() / 1000);
+                        try {
+                            ts.setVisibleRange({ from: now - 90 * 86400, to: now });
+                        } catch (_) {
+                            ts.fitContent();
+                        }
+                    } else {
+                        ts.fitContent();
+                    }
                     // Live candle anchor happens in useEffect after applyLiveQuote() runs
                 }
             } else {
@@ -2826,7 +2866,20 @@ useEffect(() => {
                     lastValueVisible: false,
                 });
                 candlestickSeries.current.setData(stockData.candlestick_data);
-                priceChart.current.timeScale().fitContent();
+                {
+                    const ts = priceChart.current.timeScale();
+                    const interval = chartConfigRef.current.interval;
+                    if (interval === '1d' || interval === '1wk') {
+                        const now = Math.floor(Date.now() / 1000);
+                        try {
+                            ts.setVisibleRange({ from: now - 90 * 86400, to: now });
+                        } catch (_) {
+                            ts.fitContent();
+                        }
+                    } else {
+                        ts.fitContent();
+                    }
+                }
             }
 
             // 3. re-add moving averages - ONLY for the selected type
@@ -3397,6 +3450,17 @@ useEffect(() => {
                                     <div className="chart-loading-overlay">
                                         <div className="loading-spinner"></div>
                                         Loading...
+                                    </div>
+                                )}
+                                {/* Show skeleton while company info is in-flight */}
+                                {!loading && fundamentalLoading && !stockData?.company_info && (
+                                    <div className="company-info-skeleton">
+                                        {[...Array(3)].map((_, i) => (
+                                            <div key={i} className="skeleton-row">
+                                                <div className="skeleton-block" style={{ width: '30%' }} />
+                                                <div className="skeleton-block" style={{ width: '50%' }} />
+                                            </div>
+                                        ))}
                                     </div>
                                 )}
                                 {stockData?.company_info && (
